@@ -146,9 +146,10 @@ func (a *API) sameOrigin(r *http.Request) bool {
 	return r.Header.Get("Sec-Fetch-Site") == "" || r.Header.Get("Sec-Fetch-Site") == "same-origin"
 }
 
+// write guards a change: a bearer token (cs) needs no CSRF guard; the cookie does.
 func (a *API) write(h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Requested-With") != "XMLHttpRequest" || !a.sameOrigin(r) {
+		if !auth.HasBearer(r) && (r.Header.Get("X-Requested-With") != "XMLHttpRequest" || !a.sameOrigin(r)) {
 			reply(w, http.StatusForbidden, detail("Cross-origin requests are refused."))
 			return
 		}
@@ -242,9 +243,15 @@ func (a *API) remove(r *http.Request, _ auth.Session) (int, any, error) {
 	return http.StatusNoContent, nil, a.containers.Delete(r.Context(), r.PathValue("name"))
 }
 
-// shell is what the terminal runs: a login shell of the image's CONTAINERSERVICE_USER if it names
-// one, else a login bash (or sh) as the image's user.
-var shell = []string{"/bin/sh", "-c", `u=${CONTAINERSERVICE_USER:-}; if [ -n "$u" ] && [ "$(id -u)" = 0 ] && id "$u" >/dev/null 2>&1 && command -v su >/dev/null 2>&1; then exec su -l "$u"; fi; if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi`}
+// shell is what the terminal runs: the tmux session "console" (made or attached, so a terminal
+// left and reopened finds what ran in it, until the container stops), as the image's
+// CONTAINERSERVICE_USER if it names one, in a login shell; without tmux, a login bash (or sh).
+// It says it does truecolor (xterm.js does), through su (-w) and tmux (RGB).
+var shell = []string{"/bin/sh", "-c", `export TERM=xterm-256color COLORTERM=truecolor
+t='if command -v tmux >/dev/null 2>&1; then exec tmux start-server \; set -g default-terminal tmux-256color \; set -as terminal-features xterm-256color:RGB \; set -g status off \; set -g mouse on \; set -g history-limit 50000 \; new-session -A -s console; elif command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi'
+u=${CONTAINERSERVICE_USER:-}
+if [ -n "$u" ] && [ "$(id -u)" = 0 ] && id "$u" >/dev/null 2>&1 && command -v su >/dev/null 2>&1; then exec su -l -w COLORTERM "$u" -c "$t"; fi
+exec sh -c "$t"`}
 
 // term serves a container's terminal websocket.
 func (a *API) term(w http.ResponseWriter, r *http.Request) {

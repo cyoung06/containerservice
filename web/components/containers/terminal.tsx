@@ -17,6 +17,31 @@ import { ConsoleFrame, type ConsoleStatus } from "./console-frame";
 const stdin = 0;
 const resizeChannel = 4;
 
+/** A dark terminal whatever the page's theme, with muted, readable ANSI colors. */
+const terminalTheme = {
+  background: "#16181d",
+  foreground: "#d8dbe2",
+  cursor: "#d8dbe2",
+  cursorAccent: "#16181d",
+  selectionBackground: "#3a4150",
+  black: "#1f2229",
+  red: "#e06c6c",
+  green: "#8fbf74",
+  yellow: "#d9b860",
+  blue: "#6aa2e8",
+  magenta: "#c08ad8",
+  cyan: "#5fbfbf",
+  white: "#c7cbd4",
+  brightBlack: "#5c6370",
+  brightRed: "#f08585",
+  brightGreen: "#a8d48e",
+  brightYellow: "#ecd07d",
+  brightBlue: "#8ab8f5",
+  brightMagenta: "#d4a5e8",
+  brightCyan: "#7fd6d6",
+  brightWhite: "#f2f4f8",
+};
+
 export const Terminal = ({
   name,
   fill = false,
@@ -41,15 +66,13 @@ export const Terminal = ({
       if (disposed) {
         return;
       }
-      const styles = getComputedStyle(document.documentElement);
       const terminal = new XTerm({
         cursorBlink: true,
         fontFamily: '"Geist Mono Variable", ui-monospace, monospace',
         fontSize: 13,
-        theme: {
-          background: styles.getPropertyValue("--background-secondary").trim() || undefined,
-          foreground: styles.getPropertyValue("--foreground").trim() || undefined,
-        },
+        // Truecolor programs (Claude Code's orange, editors' themes) draw their own colors; this is
+        // the dark palette for everything that uses the 16 ANSI colors.
+        theme: terminalTheme,
       });
       const fit = new FitAddon();
       terminal.loadAddon(fit);

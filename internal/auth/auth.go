@@ -114,21 +114,36 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Auth, error) {
 	}, nil
 }
 
-// Routes adds /auth/login, /auth/callback and /auth/logout.
+// Routes adds /auth/login, /auth/callback and /auth/logout, and cs's sign-in (cli.go).
 func (a *Auth) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /auth/login", a.login)
 	mux.HandleFunc("GET /auth/callback", a.callback)
 	mux.HandleFunc("POST /auth/logout", a.logout)
+	mux.HandleFunc("GET /cli/login", a.cliLogin)
+	mux.HandleFunc("POST /cli/login", a.cliConfirm)
+	mux.HandleFunc("POST /cli/token", a.cliExchange)
 }
 
-// Session returns the request's session, or false if there is none or it has expired.
+// Session returns the request's session, or false if there is none or it has expired: from an
+// Authorization: Bearer token (cs's) if the request has one, else from the cookie.
 func (a *Auth) Session(r *http.Request) (Session, bool) {
+	if token, ok := bearer(r); ok {
+		return a.open(cliToken, token)
+	}
+	return a.cookieSession(r)
+}
+
+func (a *Auth) cookieSession(r *http.Request) (Session, bool) {
 	c, err := r.Cookie(sessionCookie)
 	if err != nil {
 		return Session{}, false
 	}
+	return a.open(sessionCookie, c.Value)
+}
+
+func (a *Auth) open(name, value string) (Session, bool) {
 	var s Session
-	if a.seal.open(sessionCookie, c.Value, &s) != nil || !time.Now().Before(s.Expires) || !ownerID.MatchString(s.Owner) {
+	if a.seal.open(name, value, &s) != nil || !time.Now().Before(s.Expires) || !ownerID.MatchString(s.Owner) {
 		return Session{}, false
 	}
 	return s, true
