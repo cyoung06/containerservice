@@ -84,7 +84,8 @@ func main() {
 
 const usage = `cs: containerservice from a terminal
 
-  cs                          the picker: ⏎ connect, n new, s start/stop, d delete, / filter, q quit
+  cs                          the picker: ⏎ connect (tmux console), p plain shell, t other tmux session,
+                                n new, s start/stop, d delete, / filter, q quit
   cs new <name>               make a container from a preset (~/.config/cs/presets.toml) and connect
                                 --preset NAME  --image REF  --debug  --disk GiB  --home GiB (0: none)
                                 --class NAME   --no-claude

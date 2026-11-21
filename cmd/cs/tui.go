@@ -21,12 +21,14 @@ const (
 	modeNewName
 	modeNewPreset
 	modeDelete
+	modeSession
 )
 
 // picked is what the picker leaves for main to do once the screen is gone.
 type picked struct {
 	connect, create string // a container's name
 	preset          string
+	session         string // the tmux session to attach ("": a plain shell)
 }
 
 type model struct {
@@ -180,7 +182,7 @@ func (m model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	switch m.mode {
-	case modeFilter, modeNewName, modeDelete:
+	case modeFilter, modeNewName, modeDelete, modeSession:
 		switch k.String() {
 		case "esc":
 			if m.mode == modeFilter {
@@ -199,6 +201,18 @@ func (m model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.newName, m.mode, m.presetAt = value, modeNewPreset, 0
+			case modeSession:
+				c, ok := m.current()
+				if !ok {
+					m.mode = modeList
+					return m, nil
+				}
+				if !sessionRE.MatchString(value) {
+					m.status = bad.Render("A session name is letters, digits, _ and -.")
+					return m, nil
+				}
+				m.result = picked{connect: c.Name, session: value}
+				return m, tea.Quit
 			case modeDelete:
 				m.mode = modeList
 				c, ok := m.current()
@@ -243,8 +257,18 @@ func (m model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = min(m.cursor+1, max(len(m.visible())-1, 0))
 	case "enter":
 		if ok {
+			m.result = picked{connect: c.Name, session: "console"}
+			return m, tea.Quit
+		}
+	case "p":
+		if ok {
 			m.result = picked{connect: c.Name}
 			return m, tea.Quit
+		}
+	case "t":
+		if ok {
+			m.mode, m.input = modeSession, newInput("tmux session name")
+			return m, textinput.Blink
 		}
 	case "n":
 		m.mode, m.input = modeNewName, newInput("name")
@@ -329,13 +353,13 @@ func (m model) View() string {
 	}
 	b.WriteString("\n")
 	switch m.mode {
-	case modeFilter, modeNewName, modeDelete:
+	case modeFilter, modeNewName, modeDelete, modeSession:
 		b.WriteString(m.input.View() + dim.Render("  ⏎ ok · esc cancel") + "\n")
 	default:
 		if m.filter != "" {
 			b.WriteString(dim.Render("filter: "+m.filter+" (/ to change, esc in it to clear)") + "\n")
 		}
-		b.WriteString(dim.Render("⏎ connect · n new · s start/stop · d delete · / filter · q quit") + "\n")
+		b.WriteString(dim.Render("⏎ connect (tmux console) · p plain shell · t other tmux session · n new · s start/stop · d delete · / filter · q quit") + "\n")
 	}
 	if m.status != "" {
 		b.WriteString(m.status + "\n")
@@ -383,7 +407,7 @@ func pick() {
 	r := final.(model).result
 	switch {
 	case r.connect != "":
-		connect(r.connect, "console", false)
+		connect(r.connect, r.session, false)
 	case r.create != "":
 		create(r.create, r.preset, presets.Presets[r.preset])
 	}

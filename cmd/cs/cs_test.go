@@ -66,9 +66,24 @@ func TestPickerKeys(t *testing.T) {
 	}
 	step(tea.KeyMsg{Type: tea.KeyDown})
 	step(tea.KeyMsg{Type: tea.KeyEnter})
-	if m.result.connect != "c" {
+	if m.result.connect != "c" || m.result.session != "console" {
 		t.Errorf("enter on c: %+v", m.result)
 	}
+	m.result = picked{}
+	step(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if m.result.connect != "c" || m.result.session != "" {
+		t.Errorf("p on c: %+v", m.result)
+	}
+	m.result = picked{}
+	step(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	for _, r := range "work" {
+		step(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	step(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.result.connect != "c" || m.result.session != "work" {
+		t.Errorf("t work on c: %+v", m.result)
+	}
+	m.mode = modeList
 	// Filter, then new from a preset.
 	m.result = picked{}
 	step(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
