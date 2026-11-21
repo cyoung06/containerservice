@@ -44,3 +44,12 @@ Service `containers`), a Postgres database, an OIDC client, and a 32-byte sessio
 
 Tests: `go test ./...`; the store's need `CONTAINERSERVICE_TEST_DATABASE_URL` (a database they
 may own).
+
+## cs
+
+`cs` is the command-line client: a picker of your containers to land in over SSH (in the web
+console's tmux session), quick creation from presets (`~/.config/cs/presets.toml`), port
+forwards and copies. It signs in with OAuth 2.0 for native apps against the server. Get it from
+the [releases](https://github.com/cyoung06/containerservice/releases), or
+`go install github.com/cyoung06/containerservice/cmd/cs@latest`; then `cs login` and `cs`.
+`CS_ORIGIN` points it at a server other than containers.syeyoung.dev.

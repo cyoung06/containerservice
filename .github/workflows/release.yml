@@ -1,0 +1,38 @@
+# On a v* tag: build cs (the command-line client) for macOS and Linux and publish them as the
+# tag's GitHub release, with SHA-256 checksums. The server ships as a container image instead.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  cs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test ./cmd/cs/
+      - name: Build
+        run: |
+          set -eu
+          mkdir dist
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+            os=${target%/*} arch=${target#*/}
+            dir="cs_${GITHUB_REF_NAME#v}_${os}_${arch}"
+            mkdir "dist/$dir"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o "dist/$dir/cs" ./cmd/cs
+            cp LICENSE "dist/$dir/"
+            tar -C dist -czf "dist/$dir.tar.gz" "$dir"
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
+            --title "$GITHUB_REF_NAME" \
+            --notes "cs, the command-line client: download the archive for your system, put cs on your PATH, then cs login. Or: go install github.com/cyoung06/containerservice/cmd/cs@$GITHUB_REF_NAME"
