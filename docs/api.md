@@ -5,7 +5,7 @@ and a same-origin request. Errors are `{"detail": "..."}` with a 4xx/5xx status.
 
 | Method & path | Body | Answer |
 |---|---|---|
-| `GET /api/session` | | `{username, expires, ssh: {host, port} \| null}` |
+| `GET /api/session` | | `{username, expires, ssh: {host, port} \| null, images: [ref]}` (images: suggestions for a new container) |
 | `GET /api/events` | | server-sent events: `changed` whenever a container or volume changes |
 | `GET /api/containers` | | `{containers: [Container]}` |
 | `GET /api/containers/{name}` | | `Container` |
@@ -22,8 +22,12 @@ and a same-origin request. Errors are `{"detail": "..."}` with a 4xx/5xx status.
 | `POST /api/keys` | `{key, label}` | 201 key; label defaults to the key's comment |
 | `DELETE /api/keys/{id}` | | 204 |
 
-`Spec`: `{name, image, mounts: [{path, volume} | {path, temp: true, sizeMiB}], cpuMillis, memoryMiB}`
+`Spec`: `{name, image, mounts: [{path, volume} | {path, volume, new: {storageClass, sizeGiB}} | {path, temp: true, sizeMiB}], cpuMillis, memoryMiB}`
 (`readOnly` on a volume mount; limits 0 = none). Names: 1–52 of `a-z0-9-`, starting with a letter.
+A mount with `new` makes that volume before the container (409 if it exists); everything is
+checked before anything is made, and volumes made stay should the container then fail. `new` is
+not read back. Each container also gets the Secret `<name>-hostkey` (its SSH host key), owned by
+its StatefulSet.
 
 `Container`: `Spec` plus `running` (should run), `state` (`stopped`, `stopping`, `pending`,
 `running`, or the waiting reason such as `ImagePullBackOff`), `message`, `restarts`, `host` (the

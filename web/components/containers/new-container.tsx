@@ -10,39 +10,61 @@ import { Button } from "@/components/ui/button";
 import { ErrorText } from "@/components/ui/error-text";
 import { Icon } from "@/components/ui/icon";
 import { TextInput } from "@/components/ui/text-input";
+import { loadStorageClasses } from "@/lib/api/containers";
 import { post } from "@/lib/api/http";
 import type { Container, Mount, Spec } from "@/lib/api/types";
 import { useAction } from "@/lib/hooks/use-action";
+import { useResource } from "@/lib/hooks/use-resource";
 import { containerPath } from "@/lib/paths";
+
+import { useSession } from "@/components/session/session-context";
 
 import { useContainers } from "./containers-context";
 
 /** What the form holds for one mount; numbers stay text until submitted. */
 type MountRow = {
   readonly key: number;
-  readonly kind: "volume" | "temp";
+  readonly kind: "volume" | "new" | "temp";
   readonly path: string;
   readonly volume: string;
+  /** A new volume's class (null: the default) and size. */
+  readonly storageClass: string | null;
+  readonly sizeGiB: string;
   readonly readOnly: boolean;
   readonly sizeMiB: string;
 };
 
 const nameRule = /^[a-z]([a-z0-9-]{0,50}[a-z0-9])?$/;
-const keysPath = "/etc/containerservice";
+const volumeRule = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const maxGiB = 16 << 10;
+const reservedPaths = ["/etc/containerservice", "/etc/containerservice-host"];
 
 const mountProblem = (row: MountRow, rows: readonly MountRow[]): string | null => {
   const path = row.path.trim();
   if (!path.startsWith("/") || path === "/" || path.endsWith("/") || path.includes("//") || /(^|\/)\.\.?(\/|$)/.test(path)) {
     return "An absolute, clean path other than /.";
   }
-  if (path === keysPath || path.startsWith(`${keysPath}/`) || keysPath.startsWith(`${path}/`)) {
-    return `Overlaps ${keysPath}, where the SSH keys go.`;
+  const reserved = reservedPaths.find((keys) => path === keys || path.startsWith(`${keys}/`) || keys.startsWith(`${path}/`));
+  if (reserved) {
+    return `Overlaps ${reserved}, where the SSH keys go.`;
   }
   if (rows.filter((other) => other.path.trim() === path).length > 1) {
     return "Listed twice.";
   }
   if (row.kind === "volume" && !row.volume) {
     return "Pick a volume.";
+  }
+  if (row.kind === "new") {
+    if (!volumeRule.test(row.volume)) {
+      return "A volume name: 1–63 lowercase letters, digits and dashes.";
+    }
+    if (rows.filter((other) => other.kind === "new" && other.volume === row.volume).length > 1) {
+      return "That new volume is listed twice.";
+    }
+    const size = Number(row.sizeGiB);
+    if (!Number.isInteger(size) || size < 1 || size > maxGiB) {
+      return `A size of 1–${maxGiB} GiB.`;
+    }
   }
   if (row.kind === "temp" && row.sizeMiB.trim() !== "" && !(Number(row.sizeMiB) > 0)) {
     return "Empty (no cap) or a positive number of MiB.";
@@ -53,6 +75,9 @@ const mountProblem = (row: MountRow, rows: readonly MountRow[]): string | null =
 export const NewContainer = () => {
   const router = useRouter();
   const { volumes, refresh } = useContainers();
+  const { user } = useSession();
+  const classes = useResource(loadStorageClasses);
+  const defaultClass = classes.data?.find((item) => item.default)?.name ?? classes.data?.[0]?.name ?? "";
   const action = useAction();
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
@@ -67,7 +92,13 @@ export const NewContainer = () => {
   const imageOk = /^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/.test(image.trim());
   const cpuOk = Number.isFinite(cpuValue) && cpuValue >= 0;
   const memoryOk = Number.isInteger(memoryValue) && (memoryValue === 0 || memoryValue >= 64);
-  const problems = rows.map((row) => mountProblem(row, rows));
+  const problems = rows.map((row) => {
+    const problem = mountProblem(row, rows);
+    if (problem === null && row.kind === "new" && volumes?.some((volume) => volume.name === row.volume)) {
+      return "A volume with that name exists; pick it as an existing volume instead.";
+    }
+    return problem;
+  });
   const ready = nameOk && imageOk && cpuOk && memoryOk && problems.every((problem) => problem === null);
 
   const update = (key: number, change: Partial<MountRow>) =>
@@ -75,7 +106,16 @@ export const NewContainer = () => {
   const add = (kind: MountRow["kind"]) => {
     setRows((previous) => [
       ...previous,
-      { key: nextKey, kind, path: kind === "temp" ? "/scratch" : "/data", volume: volumes?.[0]?.name ?? "", readOnly: false, sizeMiB: "" },
+      {
+        key: nextKey,
+        kind,
+        path: kind === "temp" ? "/scratch" : kind === "new" ? "/home/dev" : "/data",
+        volume: kind === "volume" ? (volumes?.[0]?.name ?? "") : kind === "new" && name ? `${name}-home` : "",
+        storageClass: null,
+        sizeGiB: "20",
+        readOnly: false,
+        sizeMiB: "",
+      },
     ]);
     setNextKey((value) => value + 1);
   };
@@ -87,7 +127,9 @@ export const NewContainer = () => {
     const mounts: Mount[] = rows.map((row) =>
       row.kind === "temp"
         ? { path: row.path.trim(), temp: true, sizeMiB: row.sizeMiB.trim() === "" ? 0 : Number(row.sizeMiB) }
-        : { path: row.path.trim(), volume: row.volume, readOnly: row.readOnly },
+        : row.kind === "new"
+          ? { path: row.path.trim(), volume: row.volume, new: { storageClass: row.storageClass ?? defaultClass, sizeGiB: Number(row.sizeGiB) } }
+          : { path: row.path.trim(), volume: row.volume, readOnly: row.readOnly },
     );
     const spec: Spec = { name, image: image.trim(), mounts, cpuMillis: Math.round(cpuValue * 1000), memoryMiB: memoryValue };
     void action.run(async () => {
@@ -135,11 +177,20 @@ export const NewContainer = () => {
               id="image"
               value={image}
               onChange={(event) => setImage(event.target.value)}
-              placeholder="oci.syeyoung.dev/me/pwn:latest"
+              placeholder={user.images[0] ?? "docker.io/library/ubuntu:24.04"}
               autoComplete="off"
               spellCheck={false}
               className="font-mono text-xs"
             />
+            {user.images.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {user.images.map((ref) => (
+                  <Button key={ref} size="small" variant={image.trim() === ref ? "primary" : "secondary"} onClick={() => setImage(ref)} className="font-mono">
+                    {ref.split("/").pop()}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
           </FormField>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <FormField label="CPU limit" htmlFor="cpu" hint="Cores, e.g. 2 or 0.5; empty: none.">
@@ -154,14 +205,14 @@ export const NewContainer = () => {
             <div className="flex flex-col gap-1">
               <h2 className="text-xs font-medium text-foreground-secondary">Mounts</h2>
               <p className="text-xs text-foreground-tertiary">
-                Everything outside these is lost when the pod is recreated or stopped. Volumes are made on the Volumes page.
+                Everything outside these is lost when the pod is recreated or stopped. A new volume is made with the container and outlives it; the images keep the home folder at /home/dev.
               </p>
             </div>
             {rows.map((row, index) => (
               <div key={row.key} className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-3">
                 <div className="flex items-center gap-2 text-xs text-foreground-secondary">
                   <Icon name={row.kind === "temp" ? "clock" : "hard-drive"} size={13} className="text-foreground-tertiary" />
-                  <span className="flex-1">{row.kind === "temp" ? "Temporary folder" : "Volume"}</span>
+                  <span className="flex-1">{row.kind === "temp" ? "Temporary folder" : row.kind === "new" ? "New volume" : "Existing volume"}</span>
                   <Button size="small" variant="ghost" leadingIcon={<Icon name="close" size={12} />} onClick={() => setRows((previous) => previous.filter((other) => other.key !== row.key))}>
                     Remove
                   </Button>
@@ -178,12 +229,39 @@ export const NewContainer = () => {
                     ) : (
                       <p className="self-end text-xs text-foreground-tertiary">No volumes yet: make one on the Volumes page.</p>
                     )
+                  ) : row.kind === "new" ? (
+                    <FormField label="Volume name" htmlFor={`volume-${row.key}`}>
+                      <TextInput id={`volume-${row.key}`} value={row.volume} onChange={(event) => update(row.key, { volume: event.target.value.toLowerCase() })} placeholder="home" autoComplete="off" spellCheck={false} />
+                    </FormField>
                   ) : (
                     <FormField label="Size cap (MiB)" htmlFor={`size-${row.key}`}>
                       <TextInput id={`size-${row.key}`} inputMode="numeric" value={row.sizeMiB} onChange={(event) => update(row.key, { sizeMiB: event.target.value })} placeholder="none" />
                     </FormField>
                   )}
                 </div>
+                {row.kind === "new" ? (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <FormField label="Size (GiB)" htmlFor={`gib-${row.key}`}>
+                      <TextInput id={`gib-${row.key}`} inputMode="numeric" value={row.sizeGiB} onChange={(event) => update(row.key, { sizeGiB: event.target.value })} />
+                    </FormField>
+                    {classes.data && classes.data.length > 0 ? (
+                      <FormField label="Storage class">
+                        <SelectField
+                          label="Storage class"
+                          value={row.storageClass ?? defaultClass}
+                          onChange={(storageClass) => update(row.key, { storageClass })}
+                          items={classes.data.map((item) => ({
+                            value: item.name,
+                            label: item.name,
+                            description: [item.default ? "default" : null, item.expandable ? "can grow" : "fixed size"].filter(Boolean).join(" · "),
+                          }))}
+                        />
+                      </FormField>
+                    ) : (
+                      <ErrorText message={classes.error} />
+                    )}
+                  </div>
+                ) : null}
                 {row.kind === "volume" ? (
                   <label className="flex items-center gap-2 text-xs text-foreground-secondary">
                     <input type="checkbox" checked={row.readOnly} onChange={(event) => update(row.key, { readOnly: event.target.checked })} />
@@ -194,8 +272,11 @@ export const NewContainer = () => {
               </div>
             ))}
             <div className="flex flex-wrap gap-2">
+              <Button leadingIcon={<Icon name="plus" size={12} />} onClick={() => add("new")}>
+                Add new volume
+              </Button>
               <Button leadingIcon={<Icon name="hard-drive" size={12} />} onClick={() => add("volume")}>
-                Add volume
+                Add existing volume
               </Button>
               <Button leadingIcon={<Icon name="clock" size={12} />} onClick={() => add("temp")}>
                 Add temporary folder

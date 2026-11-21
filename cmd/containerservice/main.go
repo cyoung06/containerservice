@@ -64,6 +64,7 @@ func main() {
 	flag.StringVar(&ui.Title, "title", "Containers", "name shown in the sidebar and the tab title")
 	flag.StringVar(&ui.LoginProvider, "login-provider", "", "the sign-in provider's name for the button, e.g. \"Keycloak\" (empty: \"Sign in\")")
 	sshPublic := flag.String("ssh-public", "", "the bastion's address as the owner reaches it, host:port, shown in the UI (empty: none)")
+	images := flag.String("images", "", "comma-separated image references the new-container form suggests")
 	flag.Parse()
 
 	for name, v := range map[string]string{"namespace": cc.Namespace, "database-url-file": *databaseURLFile, "origin": a.Origin, "oidc-issuer": a.Issuer,
@@ -131,7 +132,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	handler, err := web.Handler(web.UI(), ui, a.Origin, signIn.Routes, api.New(signIn, svc, db, term, a.Origin, sshAddr, log).Routes)
+	routes := api.New(signIn, svc, db, term, a.Origin, sshAddr, log)
+	for _, ref := range strings.Split(*images, ",") {
+		if ref = strings.TrimSpace(ref); ref != "" {
+			routes.Images = append(routes.Images, ref)
+		}
+	}
+	handler, err := web.Handler(web.UI(), ui, a.Origin, signIn.Routes, routes.Routes)
 	if err != nil {
 		log.Error("ui", "err", err)
 		os.Exit(1)

@@ -2,6 +2,7 @@ package containers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"path"
@@ -39,6 +40,14 @@ type Mount struct {
 	ReadOnly bool   `json:"readOnly,omitempty"`
 	// SizeMiB caps a temporary folder; 0: no cap.
 	SizeMiB int `json:"sizeMiB,omitempty"`
+	// New, on a create, makes the volume first (it mustn't exist). Never read back.
+	New *NewVolume `json:"new,omitempty"`
+}
+
+// NewVolume is a volume to make with a container: in StorageClass (empty: the default), SizeGiB.
+type NewVolume struct {
+	StorageClass string `json:"storageClass"`
+	SizeGiB      int    `json:"sizeGiB"`
 }
 
 // Container is a container as the API shows it.
@@ -83,20 +92,33 @@ func (sp *Spec) Check() error {
 	if len(sp.Mounts) > maxMounts {
 		return refuse(http.StatusBadRequest, "At most %d mounts.", maxMounts)
 	}
-	seen := map[string]bool{}
+	seen, newNames := map[string]bool{}, map[string]bool{}
 	for i := range sp.Mounts {
 		m := &sp.Mounts[i]
 		if !strings.HasPrefix(m.Path, "/") || path.Clean(m.Path) != m.Path || m.Path == "/" || len(m.Path) > 256 || strings.ContainsAny(m.Path, ":\x00\n") {
 			return refuse(http.StatusBadRequest, "Mount path %q: an absolute, clean path other than /.", m.Path)
 		}
-		if m.Path == KeysPath || strings.HasPrefix(m.Path+"/", KeysPath+"/") || strings.HasPrefix(KeysPath, m.Path+"/") {
-			return refuse(http.StatusBadRequest, "Mount path %q overlaps %s, where the SSH keys go.", m.Path, KeysPath)
+		for _, reserved := range []string{KeysPath, HostKeyPath} {
+			if m.Path == reserved || strings.HasPrefix(m.Path, reserved+"/") || strings.HasPrefix(reserved, m.Path+"/") {
+				return refuse(http.StatusBadRequest, "Mount path %q overlaps %s, where the SSH keys go.", m.Path, reserved)
+			}
 		}
 		if seen[m.Path] {
 			return refuse(http.StatusBadRequest, "Mount path %q is listed twice.", m.Path)
 		}
 		seen[m.Path] = true
 		switch {
+		case m.New != nil:
+			if m.Temp || !volumeRE.MatchString(m.Volume) || m.ReadOnly || m.SizeMiB != 0 {
+				return refuse(http.StatusBadRequest, "New volume at %q: a volume name (1–63 lowercase letters, digits and dashes), not read-only.", m.Path)
+			}
+			if m.New.SizeGiB < 1 || m.New.SizeGiB > maxVolumeGiB {
+				return refuse(http.StatusBadRequest, "New volume %q: 1–%d GiB.", m.Volume, maxVolumeGiB)
+			}
+			if newNames[m.Volume] {
+				return refuse(http.StatusBadRequest, "New volume %q is listed twice.", m.Volume)
+			}
+			newNames[m.Volume] = true
 		case m.Temp && m.Volume == "":
 			if m.SizeMiB < 0 || m.ReadOnly {
 				return refuse(http.StatusBadRequest, "Temporary folder %q: size 0 (no cap) or positive, and not read-only.", m.Path)
@@ -117,7 +139,10 @@ func (s *Service) statefulSet(sp Spec) *appsv1.StatefulSet {
 	podLabels := map[string]string{ManagedBy: managedByValue, NameLabel: sp.Name}
 	volumes := []corev1.Volume{{Name: "authorized-keys", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 		SecretName: KeysSecret, DefaultMode: ptr.To[int32](0o644), Optional: ptr.To(true)}}}}
-	mounts := []corev1.VolumeMount{{Name: "authorized-keys", MountPath: KeysPath, ReadOnly: true}}
+	// The pod waits for its host key Secret, made right after the StatefulSet.
+	volumes = append(volumes, corev1.Volume{Name: "host-key", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+		SecretName: HostKeySecret(sp.Name), DefaultMode: ptr.To[int32](0o400)}}})
+	mounts := []corev1.VolumeMount{{Name: "authorized-keys", MountPath: KeysPath, ReadOnly: true}, {Name: "host-key", MountPath: HostKeyPath, ReadOnly: true}}
 	for i, m := range sp.Mounts {
 		name := fmt.Sprintf("m%d", i)
 		var src corev1.VolumeSource
@@ -201,7 +226,7 @@ func specOf(set *appsv1.StatefulSet) Spec {
 	for _, vm := range main.VolumeMounts {
 		v, ok := vols[vm.Name]
 		switch {
-		case !ok || vm.MountPath == KeysPath:
+		case !ok || vm.MountPath == KeysPath || vm.MountPath == HostKeyPath:
 		case v.PersistentVolumeClaim != nil:
 			sp.Mounts = append(sp.Mounts, Mount{Path: vm.MountPath, Volume: v.PersistentVolumeClaim.ClaimName, ReadOnly: vm.ReadOnly})
 		case v.EmptyDir != nil:
@@ -278,22 +303,45 @@ func (s *Service) Get(name string) (Container, error) {
 	return s.view(set), nil
 }
 
-// Create makes the container and starts it. The name is claimed by the API server: creating a
-// StatefulSet that exists fails.
+// Create makes the container and starts it, making its new volumes first. Everything is checked
+// before anything is made; should a step fail after that, the volumes made stay, as volumes. The
+// name is claimed by the API server: creating a StatefulSet that exists fails.
 func (s *Service) Create(ctx context.Context, sp Spec) (Container, error) {
 	if err := sp.Check(); err != nil {
 		return Container{}, err
 	}
+	if _, err := s.sets.Get(sp.Name); err == nil {
+		return Container{}, refuse(http.StatusConflict, "A container named %q already exists.", sp.Name)
+	}
 	for _, m := range sp.Mounts {
-		if !m.Temp {
-			if _, err := s.vols.Get(m.Volume); err != nil {
-				return Container{}, refuse(http.StatusBadRequest, "There is no volume %q.", m.Volume)
+		_, err := s.vols.Get(m.Volume)
+		switch {
+		case m.Temp:
+		case m.New == nil && err != nil:
+			return Container{}, refuse(http.StatusBadRequest, "There is no volume %q.", m.Volume)
+		case m.New != nil && err == nil:
+			return Container{}, refuse(http.StatusConflict, "A volume named %q already exists.", m.Volume)
+		case m.New != nil:
+			if err := s.checkClass(ctx, m.New.StorageClass); err != nil {
+				return Container{}, err
+			}
+		}
+	}
+	for _, m := range sp.Mounts {
+		if m.New != nil {
+			if _, err := s.CreateVolume(ctx, m.Volume, m.New.StorageClass, m.New.SizeGiB); err != nil {
+				return Container{}, err
 			}
 		}
 	}
 	set, err := s.client.AppsV1().StatefulSets(s.cfg.Namespace).Create(ctx, s.statefulSet(sp), metav1.CreateOptions{})
 	if err != nil {
 		return Container{}, kubeError(err, fmt.Sprintf("A container named %q", sp.Name))
+	}
+	if err := s.createHostKey(ctx, set); err != nil {
+		// Without it the pod never starts: take the container back.
+		derr := s.client.AppsV1().StatefulSets(s.cfg.Namespace).Delete(ctx, set.Name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
+		return Container{}, errors.Join(err, derr)
 	}
 	return s.view(set), nil
 }

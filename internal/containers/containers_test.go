@@ -20,6 +20,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/utils/ptr"
+
+	"golang.org/x/crypto/ssh"
 )
 
 type fakeKeys struct {
@@ -90,6 +92,11 @@ func TestCheck(t *testing.T) {
 		"neither kind":     {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/a"}}},
 		"sized volume":     {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/a", Volume: "w", SizeMiB: 5}}},
 		"tiny memory":      {Name: "pwn", Image: "ubuntu", MemoryMiB: 10},
+		"host key path":    {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/etc/containerservice-host/x", Volume: "w"}}},
+		"new without size": {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/a", Volume: "w", New: &NewVolume{}}}},
+		"new temp":         {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/a", Volume: "w", Temp: true, New: &NewVolume{SizeGiB: 1}}}},
+		"new read-only":    {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/a", Volume: "w", ReadOnly: true, New: &NewVolume{SizeGiB: 1}}}},
+		"new twice":        {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/a", Volume: "w", New: &NewVolume{SizeGiB: 1}}, {Path: "/b", Volume: "w", New: &NewVolume{SizeGiB: 1}}}},
 	}
 	for what, sp := range bad {
 		if err := sp.Check(); status(err) != http.StatusBadRequest {
@@ -131,8 +138,63 @@ func TestCreateMakesTheStatefulSet(t *testing.T) {
 	if got := specOf(set); !reflect.DeepEqual(got, sp) {
 		t.Errorf("spec doesn't read back:\n got %+v\nwant %+v", got, sp)
 	}
+	key, err := client.CoreV1().Secrets("cs").Get(context.Background(), "pwn-hostkey", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := key.OwnerReferences; len(o) != 1 || o[0].Kind != "StatefulSet" || o[0].Name != "pwn" || o[0].UID != set.UID {
+		t.Errorf("host key owner: %+v", o)
+	}
+	if _, err := ssh.ParsePrivateKey(key.Data["ssh_host_ed25519_key"]); err != nil {
+		t.Errorf("host key: %v", err)
+	}
+	found := false
+	for _, v := range pod.Volumes {
+		found = found || (v.Secret != nil && v.Secret.SecretName == "pwn-hostkey")
+	}
+	if !found {
+		t.Error("the pod doesn't mount its host key")
+	}
 	if _, err := s.Create(context.Background(), sp); status(err) != http.StatusConflict {
 		t.Errorf("second create: %v, want a 409", err)
+	}
+}
+
+func TestCreateMakesNewVolumes(t *testing.T) {
+	zfs := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "zfs"}, Provisioner: "zfs.csi.openebs.io"}
+	static := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "static"}, Provisioner: noProvisioner}
+	taken := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "taken", Namespace: "cs", Labels: map[string]string{ManagedBy: managedByValue}}}
+	s, client, _ := newService(t, zfs, static, taken)
+	ctx := context.Background()
+	refused := map[string]Mount{
+		"existing name": {Path: "/home/dev", Volume: "taken", New: &NewVolume{StorageClass: "zfs", SizeGiB: 1}},
+		"static class":  {Path: "/home/dev", Volume: "home", New: &NewVolume{StorageClass: "static", SizeGiB: 1}},
+		"no such class": {Path: "/home/dev", Volume: "home", New: &NewVolume{StorageClass: "nope", SizeGiB: 1}},
+	}
+	for what, m := range refused {
+		// The good new volume comes first: nothing at all may be made when a later mount is refused.
+		sp := Spec{Name: "dev", Image: "ubuntu", Mounts: []Mount{{Path: "/a", Volume: "first", New: &NewVolume{StorageClass: "zfs", SizeGiB: 1}}, m}}
+		if _, err := s.Create(ctx, sp); status(err) < 400 || status(err) > 409 {
+			t.Errorf("%s: got %v, want a refusal", what, err)
+		}
+	}
+	if pvcs, _ := client.CoreV1().PersistentVolumeClaims("cs").List(ctx, metav1.ListOptions{}); len(pvcs.Items) != 1 {
+		t.Fatalf("refused creates made volumes: %d", len(pvcs.Items))
+	}
+	sp := Spec{Name: "dev", Image: "ubuntu", Mounts: []Mount{{Path: "/home/dev", Volume: "home", New: &NewVolume{StorageClass: "zfs", SizeGiB: 20}}}}
+	c, err := s.Create(ctx, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pvc, err := client.CoreV1().PersistentVolumeClaims("cs").Get(ctx, "home", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; gib(q) != 20 || ptr.Deref(pvc.Spec.StorageClassName, "") != "zfs" {
+		t.Errorf("volume: %v in %v", q.String(), pvc.Spec.StorageClassName)
+	}
+	if want := []Mount{{Path: "/home/dev", Volume: "home"}}; !reflect.DeepEqual(c.Mounts, want) {
+		t.Errorf("mounts read back %+v, want %+v", c.Mounts, want)
 	}
 }
 

@@ -138,11 +138,10 @@ func (s *Service) CreateVolume(ctx context.Context, name, class string, sizeGiB 
 			Resources:   corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: *resource.NewQuantity(int64(sizeGiB)<<30, resource.BinarySI)}},
 		},
 	}
+	if err := s.checkClass(ctx, class); err != nil {
+		return Volume{}, err
+	}
 	if class != "" {
-		sc, err := s.client.StorageV1().StorageClasses().Get(ctx, class, metav1.GetOptions{})
-		if err != nil || sc.Provisioner == noProvisioner {
-			return Volume{}, refuse(http.StatusBadRequest, "There is no storage class %q that makes volumes.", class)
-		}
 		pvc.Spec.StorageClassName = &class
 	}
 	pvc, err := s.client.CoreV1().PersistentVolumeClaims(s.cfg.Namespace).Create(ctx, pvc, metav1.CreateOptions{})
@@ -150,6 +149,18 @@ func (s *Service) CreateVolume(ctx context.Context, name, class string, sizeGiB 
 		return Volume{}, kubeError(err, fmt.Sprintf("A volume named %q", name))
 	}
 	return volumeView(pvc, nil), nil
+}
+
+// checkClass refuses a class that doesn't exist or makes no volumes; empty is the default class.
+func (s *Service) checkClass(ctx context.Context, class string) error {
+	if class == "" {
+		return nil
+	}
+	sc, err := s.client.StorageV1().StorageClasses().Get(ctx, class, metav1.GetOptions{})
+	if err != nil || sc.Provisioner == noProvisioner {
+		return refuse(http.StatusBadRequest, "There is no storage class %q that makes volumes.", class)
+	}
+	return nil
 }
 
 func (s *Service) volume(name string) (*corev1.PersistentVolumeClaim, error) {

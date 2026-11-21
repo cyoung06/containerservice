@@ -43,6 +43,8 @@ type API struct {
 	origin     string
 	ssh        *SSH
 	log        *slog.Logger
+	// Images are suggested in the new-container form; any image may still be given.
+	Images []string
 }
 
 // SSH is the bastion's public address, shown with each container.
@@ -159,7 +161,14 @@ func decode(r *http.Request, v any, what string) error {
 }
 
 func (a *API) session(_ *http.Request, s auth.Session) (int, any, error) {
-	return http.StatusOK, map[string]any{"username": s.Username, "expires": s.Expires.UTC(), "ssh": a.ssh}, nil
+	return http.StatusOK, map[string]any{"username": s.Username, "expires": s.Expires.UTC(), "ssh": a.ssh, "images": a.images()}, nil
+}
+
+func (a *API) images() []string {
+	if a.Images == nil {
+		return []string{}
+	}
+	return a.Images
 }
 
 // events is a server-sent event stream: "changed" whenever a container or volume changes, for the
@@ -227,8 +236,9 @@ func (a *API) remove(r *http.Request, _ auth.Session) (int, any, error) {
 	return http.StatusNoContent, nil, a.containers.Delete(r.Context(), r.PathValue("name"))
 }
 
-// shell is what the terminal runs: a login bash where there is one, else sh.
-var shell = []string{"/bin/sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi"}
+// shell is what the terminal runs: a login shell of the image's CONTAINERSERVICE_USER if it names
+// one, else a login bash (or sh) as the image's user.
+var shell = []string{"/bin/sh", "-c", `u=${CONTAINERSERVICE_USER:-}; if [ -n "$u" ] && [ "$(id -u)" = 0 ] && id "$u" >/dev/null 2>&1 && command -v su >/dev/null 2>&1; then exec su -l "$u"; fi; if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi`}
 
 // term serves a container's terminal websocket.
 func (a *API) term(w http.ResponseWriter, r *http.Request) {

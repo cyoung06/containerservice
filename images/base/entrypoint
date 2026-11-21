@@ -1,0 +1,20 @@
+#!/bin/sh
+# Prepares the home folder (a fresh volume mounted at /home/dev is empty and root's) and runs sshd
+# with the container's own host key, or a throwaway one where there is none.
+set -eu
+user=${CONTAINERSERVICE_USER:-dev}
+home=$(getent passwd "$user" | cut -d: -f6)
+if [ -n "$home" ] && [ -d "$home" ]; then
+  if [ -z "$(ls -A "$home" | grep -vx lost+found || true)" ]; then
+    cp -a /etc/skel/. "$home"/
+    chown -R "$user:$user" "$home"
+  fi
+  chown "$user:$user" "$home"
+fi
+mkdir -p /run/sshd
+key=/etc/containerservice-host/ssh_host_ed25519_key
+if [ -f "$key" ]; then
+  exec /usr/sbin/sshd -D -e -h "$key"
+fi
+ssh-keygen -A >/dev/null
+exec /usr/sbin/sshd -D -e

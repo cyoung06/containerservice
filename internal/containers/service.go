@@ -41,6 +41,9 @@ const (
 	KeysSecret = "authorized-keys"
 	// KeysPath is where containers see it: KeysPath/authorized_keys.
 	KeysPath = "/etc/containerservice"
+	// HostKeyPath is where a container sees its own SSH host key, kept across restarts in the
+	// Secret HostKeySecret(name): HostKeyPath/ssh_host_ed25519_key (and .pub).
+	HostKeyPath = "/etc/containerservice-host"
 )
 
 // Error is a request refused, with the status and message to show.

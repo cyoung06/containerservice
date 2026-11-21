@@ -4,6 +4,8 @@ export type SessionInfo = {
   readonly username: string;
   readonly expires: string;
   readonly ssh: { readonly host: string; readonly port: number } | null;
+  /** Images the new-container form suggests. */
+  readonly images: readonly string[];
 };
 
 /** A volume (by name) or a temporary folder at path. */
@@ -14,6 +16,8 @@ export type Mount = {
   readonly readOnly?: boolean;
   /** Caps a temporary folder; 0 or absent: no cap. */
   readonly sizeMiB?: number;
+  /** On a create: make the volume first (it mustn't exist). Never read back. */
+  readonly new?: { readonly storageClass: string; readonly sizeGiB: number };
 };
 
 export type Spec = {

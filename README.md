@@ -16,13 +16,26 @@ One owner (a Keycloak group), one namespace.
 
 containerservice doesn't change images. An image to use with it should:
 
-- run `sshd` on port 22 as its main process (or under one), with
-  `AuthorizedKeysFile /etc/containerservice/authorized_keys` for the login user. The file is the
+- run `sshd` on port 22 as its main process (or under one), taking the login user's keys from
+  `/etc/containerservice/authorized_keys` with
+  `AuthorizedKeysCommand /usr/bin/cat /etc/containerservice/authorized_keys` (and
+  `AuthorizedKeysCommandUser nobody`): as `AuthorizedKeysFile` sshd refuses it, because Kubernetes
+  sets the Secret volume directory's modes. The file is the
   Secret `authorized-keys`, kept equal to the keys in the console; edits reach running pods
   within a minute or so (kubelet's Secret refresh);
 - carry the login user, with passwordless sudo if wanted;
-- have `/bin/sh` for the web terminal, which runs `bash -l` if there is one, else `sh -l`, as the
-  image's user.
+- have `/bin/sh` for the web terminal, which runs `su -l $CONTAINERSERVICE_USER` if the image sets
+  that variable (and runs as root), else `bash -l` if there is one, else `sh -l`, as the image's
+  user;
+- for a host key that stays across restarts, use `/etc/containerservice-host/ssh_host_ed25519_key`
+  (`sshd -h`): each container gets its own, in the Secret `<name>-hostkey`, deleted with the
+  container.
+
+`images/` has images that do all this (Ubuntu 24.04, user `dev` with passwordless sudo, home at
+`/home/dev`): `base`, `pwn` (gdb/pwndbg, pwntools, ROPgadget, one_gadget, radare2, qemu-user) and
+`claude` (Claude Code, Node, gh, Go, uv). `images/build.sh` builds and pushes them to
+`oci.syeyoung.dev/containers/`. Mount a volume at `/home/dev` to keep the home folder; a fresh,
+empty one is filled from `/etc/skel` on first start.
 
 ## Running
 
