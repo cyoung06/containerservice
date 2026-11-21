@@ -33,7 +33,10 @@ type StorageClass struct {
 	Expandable bool   `json:"expandable"`
 }
 
-const maxVolumeGiB = 16 << 10
+const (
+	maxVolumeGiB  = 16 << 10
+	noProvisioner = "kubernetes.io/no-provisioner"
+)
 
 func gib(q resource.Quantity) int { return int(q.Value() >> 30) }
 
@@ -97,8 +100,9 @@ func (s *Service) Volumes() ([]Volume, error) {
 	return out, nil
 }
 
-// StorageClasses is the cluster's storage classes. Read from the API server when asked: it's a
-// form's list, not a hot path.
+// StorageClasses is the cluster's storage classes that make volumes on demand: one without a
+// provisioner ("kubernetes.io/no-provisioner", static PVs only) would leave a new volume pending for
+// good. Read from the API server when asked: it's a form's list, not a hot path.
 func (s *Service) StorageClasses(ctx context.Context) ([]StorageClass, error) {
 	list, err := s.client.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -106,6 +110,9 @@ func (s *Service) StorageClasses(ctx context.Context) ([]StorageClass, error) {
 	}
 	out := make([]StorageClass, 0, len(list.Items))
 	for _, c := range list.Items {
+		if c.Provisioner == noProvisioner {
+			continue
+		}
 		out = append(out, StorageClass{
 			Name:       c.Name,
 			Default:    c.Annotations["storageclass.kubernetes.io/is-default-class"] == "true",
@@ -132,6 +139,10 @@ func (s *Service) CreateVolume(ctx context.Context, name, class string, sizeGiB 
 		},
 	}
 	if class != "" {
+		sc, err := s.client.StorageV1().StorageClasses().Get(ctx, class, metav1.GetOptions{})
+		if err != nil || sc.Provisioner == noProvisioner {
+			return Volume{}, refuse(http.StatusBadRequest, "There is no storage class %q that makes volumes.", class)
+		}
 		pvc.Spec.StorageClassName = &class
 	}
 	pvc, err := s.client.CoreV1().PersistentVolumeClaims(s.cfg.Namespace).Create(ctx, pvc, metav1.CreateOptions{})

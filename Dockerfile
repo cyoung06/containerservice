@@ -1,10 +1,20 @@
-# containerservice: a static Go binary on distroless. (The web UI is embedded once it exists.)
+# containerservice: the Next.js export of web/, built from its lockfile and embedded into a static Go
+# binary on distroless. Whatever a local build left in internal/web/ui is discarded first.
+FROM node:24 AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
 FROM golang:1.26 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
+RUN find internal/web/ui -mindepth 1 ! -name .gitignore -delete
+COPY --from=web /web/out/ internal/web/ui/
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/containerservice ./cmd/containerservice
 

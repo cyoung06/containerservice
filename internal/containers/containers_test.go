@@ -203,11 +203,18 @@ func TestPodState(t *testing.T) {
 }
 
 func TestVolumes(t *testing.T) {
-	sc := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "zfs", Annotations: map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}}, AllowVolumeExpansion: ptr.To(true)}
-	s, client, _ := newService(t, sc)
+	sc := &storagev1.StorageClass{Provisioner: "zfs.csi.openebs.io", ObjectMeta: metav1.ObjectMeta{Name: "zfs", Annotations: map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}}, AllowVolumeExpansion: ptr.To(true)}
+	static := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "static"}, Provisioner: noProvisioner}
+	s, client, _ := newService(t, sc, static)
 	ctx := context.Background()
 	if _, err := s.CreateVolume(ctx, "work", "zfs", 0); status(err) != http.StatusBadRequest {
 		t.Errorf("0 GiB: %v", err)
+	}
+	if _, err := s.CreateVolume(ctx, "work", "static", 1); status(err) != http.StatusBadRequest {
+		t.Errorf("class without a provisioner: %v", err)
+	}
+	if _, err := s.CreateVolume(ctx, "work", "nope", 1); status(err) != http.StatusBadRequest {
+		t.Errorf("missing class: %v", err)
 	}
 	if _, err := s.CreateVolume(ctx, "Work", "zfs", 1); status(err) != http.StatusBadRequest {
 		t.Errorf("bad name: %v", err)

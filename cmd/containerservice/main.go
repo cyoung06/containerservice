@@ -25,6 +25,7 @@ import (
 	"github.com/cyoung06/containerservice/internal/containers"
 	"github.com/cyoung06/containerservice/internal/store"
 	"github.com/cyoung06/containerservice/internal/terminal"
+	"github.com/cyoung06/containerservice/internal/web"
 )
 
 var version = "dev"
@@ -59,6 +60,9 @@ func main() {
 	flag.StringVar(&a.UsernameClaim, "username-claim", "preferred_username", "the ID token claim with the username")
 	flag.StringVar(&a.KeyFile, "session-key-file", "", "file holding the 32-byte session cookie key, raw or base64 (required)")
 	flag.DurationVar(&a.Lifetime, "session-lifetime", 7*24*time.Hour, "how long a sign-in lasts")
+	var ui web.Config
+	flag.StringVar(&ui.Title, "title", "Containers", "name shown in the sidebar and the tab title")
+	flag.StringVar(&ui.LoginProvider, "login-provider", "", "the sign-in provider's name for the button, e.g. \"Keycloak\" (empty: \"Sign in\")")
 	sshPublic := flag.String("ssh-public", "", "the bastion's address as the owner reaches it, host:port, shown in the UI (empty: none)")
 	flag.Parse()
 
@@ -127,12 +131,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	mux := http.NewServeMux()
-	signIn.Routes(mux)
-	api.New(signIn, svc, db, term, a.Origin, sshAddr, log).Routes(mux)
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
+	handler, err := web.Handler(web.UI(), ui, a.Origin, signIn.Routes, api.New(signIn, svc, db, term, a.Origin, sshAddr, log).Routes)
+	if err != nil {
+		log.Error("ui", "err", err)
+		os.Exit(1)
+	}
 	// The event stream and the terminals are long-lived: each clears these deadlines for itself.
-	srv := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: time.Minute}
+	srv := &http.Server{Addr: *listen, Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: time.Minute}
 	go func() { <-ctx.Done(); srv.Close() }()
 	log.Info("containerservice listening", "addr", *listen, "version", version, "namespace", cc.Namespace)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
