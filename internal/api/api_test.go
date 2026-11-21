@@ -29,8 +29,9 @@ func (s signedIn) Session(*http.Request) (auth.Session, bool) {
 }
 
 type memKeys struct {
-	mu   sync.Mutex
-	keys []store.Key
+	mu     sync.Mutex
+	keys   []store.Key
+	claude store.Claude
 }
 
 func (m *memKeys) AddKey(_ context.Context, k store.Key, max int) (bool, error) {
@@ -70,6 +71,28 @@ func (m *memKeys) KeyLines(ctx context.Context) ([]string, error) {
 		out = append(out, k.Line)
 	}
 	return out, nil
+}
+
+func (m *memKeys) Claude(context.Context) (store.Claude, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.claude, nil
+}
+func (m *memKeys) SetClaudeToken(_ context.Context, token string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.claude.Token = token
+	return nil
+}
+func (m *memKeys) SetClaudeSettings(_ context.Context, settings string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.claude.Settings = settings
+	return nil
+}
+func (m *memKeys) ClaudeConfig(ctx context.Context) (string, string, error) {
+	c, _ := m.Claude(ctx)
+	return c.Token, c.Settings, nil
 }
 
 func setup(t *testing.T, in bool) (http.Handler, *fake.Clientset) {
@@ -165,5 +188,31 @@ func TestCreateContainer(t *testing.T) {
 	}
 	if w := do(h, "GET", "/api/session", "", false); !strings.Contains(w.Body.String(), `"port":2223`) {
 		t.Errorf("session: %s", w.Body)
+	}
+}
+
+func TestClaude(t *testing.T) {
+	h, client := setup(t, true)
+	if w := do(h, "PUT", "/api/claude/token", `{"token":"sk-ant-oat01-abc"}`, true); w.Code != http.StatusNoContent {
+		t.Fatalf("token: %d %s", w.Code, w.Body)
+	}
+	for body, want := range map[string]int{`{"settings":"{\"model\":\"opus\"}"}`: 204, `{"settings":"[1]"}`: 400, `{"settings":"nope"}`: 400, `{"settings":""}`: 204} {
+		if w := do(h, "PUT", "/api/claude/settings", body, true); w.Code != want {
+			t.Errorf("settings %s: %d, want %d (%s)", body, w.Code, want, w.Body)
+		}
+	}
+	if w := do(h, "PUT", "/api/claude/token", `{"token":"has space"}`, true); w.Code != http.StatusBadRequest {
+		t.Errorf("token with a space: %d", w.Code)
+	}
+	w := do(h, "GET", "/api/claude", "", false)
+	if w.Code != 200 || strings.Contains(w.Body.String(), "sk-ant") || !strings.Contains(w.Body.String(), `"tokenSet":true`) {
+		t.Errorf("get: %d %s", w.Code, w.Body)
+	}
+	sec, err := client.CoreV1().Secrets("cs").Get(context.Background(), containers.ClaudeLoginSecret, metav1.GetOptions{})
+	if err != nil || string(sec.Data["token"]) != "sk-ant-oat01-abc" {
+		t.Errorf("secret: %v %q", err, sec.Data["token"])
+	}
+	if w := do(h, "PUT", "/api/claude/token", `{"token":"x"}`, false); w.Code != http.StatusForbidden {
+		t.Errorf("without X-Requested-With: %d", w.Code)
 	}
 }

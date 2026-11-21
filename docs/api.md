@@ -22,8 +22,11 @@ and a same-origin request. Errors are `{"detail": "..."}` with a 4xx/5xx status.
 | `POST /api/keys` | `{key, label}` | 201 key; label defaults to the key's comment |
 | `DELETE /api/keys/{id}` | | 204 |
 
-`Spec`: `{name, image, mounts: [{path, volume} | {path, volume, new: {storageClass, sizeGiB}} | {path, temp: true, sizeMiB}], cpuMillis, memoryMiB}`
-(`readOnly` on a volume mount; limits 0 = none). Names: 1–52 of `a-z0-9-`, starting with a letter.
+`Spec`: `{name, image, mounts: [{path, volume} | {path, volume, new: {storageClass, sizeGiB}} | {path, temp: true, sizeMiB}], cpuMillis, memoryMiB, diskGiB, debug}`
+(`readOnly` on a volume mount; cpu/memory 0 = none; `diskGiB` 1–100, 0 = 20, caps the root
+filesystem and temporary folders; `debug`: ptrace and no seccomp filter, else hardened: the
+default seccomp profile, no NET_RAW/MKNOD, and the pod label-free of
+`containerservice.syeyoung.dev/debug` for the network policy that keeps it from other pods). Names: 1–52 of `a-z0-9-`, starting with a letter.
 A mount with `new` makes that volume before the container (409 if it exists); everything is
 checked before anything is made, and volumes made stay should the container then fail. `new` is
 not read back. Each container also gets the Secret `<name>-hostkey` (its SSH host key), owned by

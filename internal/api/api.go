@@ -27,6 +27,9 @@ type Keys interface {
 	AddKey(ctx context.Context, k store.Key, max int) (bool, error)
 	Keys(ctx context.Context) ([]store.Key, error)
 	DeleteKey(ctx context.Context, id string) error
+	Claude(ctx context.Context) (store.Claude, error)
+	SetClaudeToken(ctx context.Context, token string) error
+	SetClaudeSettings(ctx context.Context, settings string) error
 }
 
 // Sessions tells who a request is from.
@@ -81,6 +84,9 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/keys", a.read(a.listKeys))
 	mux.HandleFunc("POST /api/keys", a.write(a.addKey))
 	mux.HandleFunc("DELETE /api/keys/{id}", a.write(a.deleteKey))
+	mux.HandleFunc("GET /api/claude", a.read(a.claude))
+	mux.HandleFunc("PUT /api/claude/token", a.write(a.setClaudeToken))
+	mux.HandleFunc("PUT /api/claude/settings", a.write(a.setClaudeSettings))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusNotFound, detail("No such endpoint."))
 	})
@@ -389,4 +395,58 @@ func (a *API) deleteKey(r *http.Request, _ auth.Session) (int, any, error) {
 		return 0, nil, err
 	}
 	return http.StatusNoContent, nil, a.containers.SyncKeys(r.Context())
+}
+
+// claude is the Claude Code login and shared settings; the token itself is never sent back.
+func (a *API) claude(r *http.Request, _ auth.Session) (int, any, error) {
+	c, err := a.keys.Claude(r.Context())
+	if err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, map[string]any{"tokenSet": c.Token != "", "tokenAt": c.TokenAt, "settings": c.Settings, "settingsAt": c.SettingsAt}, nil
+}
+
+// MaxClaudeSettings bounds the settings JSON.
+const MaxClaudeSettings = 64 << 10
+
+var tokenRE = regexp.MustCompile(`^[\x21-\x7e]{1,512}$`)
+
+func (a *API) setClaudeToken(r *http.Request, _ auth.Session) (int, any, error) {
+	var b struct {
+		Token string `json:"token"`
+	}
+	if err := decode(r, &b, "a token"); err != nil {
+		return 0, nil, err
+	}
+	b.Token = strings.TrimSpace(b.Token)
+	if b.Token != "" && !tokenRE.MatchString(b.Token) {
+		return 0, nil, bad("A token is up to 512 printable characters without spaces (from claude setup-token); empty removes it.")
+	}
+	if err := a.keys.SetClaudeToken(r.Context(), b.Token); err != nil {
+		return 0, nil, err
+	}
+	return http.StatusNoContent, nil, a.containers.SyncClaude(r.Context())
+}
+
+func (a *API) setClaudeSettings(r *http.Request, _ auth.Session) (int, any, error) {
+	var b struct {
+		Settings string `json:"settings"`
+	}
+	if err := decode(r, &b, "settings"); err != nil {
+		return 0, nil, err
+	}
+	b.Settings = strings.TrimSpace(b.Settings)
+	if len(b.Settings) > MaxClaudeSettings {
+		return 0, nil, bad("Settings are at most %d KiB.", MaxClaudeSettings>>10)
+	}
+	if b.Settings != "" {
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(b.Settings), &obj); err != nil || obj == nil {
+			return 0, nil, bad("Settings are a JSON object, like {\"model\": \"opus\"}; empty removes them.")
+		}
+	}
+	if err := a.keys.SetClaudeSettings(r.Context(), b.Settings); err != nil {
+		return 0, nil, err
+	}
+	return http.StatusNoContent, nil, a.containers.SyncClaude(r.Context())
 }

@@ -65,3 +65,22 @@ func TestKeys(t *testing.T) {
 		t.Errorf("deleted key: %v", err)
 	}
 }
+
+func TestClaude(t *testing.T) {
+	p := open(t)
+	ctx := context.Background()
+	if err := p.SetClaudeToken(ctx, "tok"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetClaudeSettings(ctx, `{"a":1}`); err != nil {
+		t.Fatal(err)
+	}
+	c, err := p.Claude(ctx)
+	if err != nil || c.Token != "tok" || c.TokenAt == nil || c.Settings != `{"a":1}` || c.SettingsAt == nil {
+		t.Fatalf("%+v %v", c, err)
+	}
+	p.SetClaudeToken(ctx, "")
+	if c, _ := p.Claude(ctx); c.Token != "" || c.TokenAt != nil {
+		t.Errorf("after clearing: %+v", c)
+	}
+}

@@ -63,7 +63,12 @@ func TestLiveImage(t *testing.T) {
 	if err := s.SyncKeys(ctx); err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.Create(ctx, Spec{Name: "liveimg", Image: image, MemoryMiB: 1024,
+	keys.token, keys.settings = "live-token", `{"model":"live"}`
+	if err := s.SyncClaude(ctx); err != nil {
+		t.Fatal(err)
+	}
+	claude := strings.Contains(image, "/claude:")
+	_, err = s.Create(ctx, Spec{Name: "liveimg", Image: image, MemoryMiB: 1024, ClaudeLogin: claude,
 		Mounts: []Mount{{Path: "/home/dev", Volume: "liveimg-home", New: &NewVolume{StorageClass: "zfs", SizeGiB: 1}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -172,6 +177,13 @@ func TestLiveImage(t *testing.T) {
 	}
 	waitState("running")
 	waitSSHD()
+	if claude {
+		got := session(`bash -lc 'echo "token=$CLAUDE_CODE_OAUTH_TOKEN"; cat /etc/claude-code/managed-settings.d/console.json; echo; id -u; claude --version; claude -p hi --dangerously-skip-permissions 2>&1 | head -3'`)
+		t.Logf("claude:\n%s", got)
+		if !strings.Contains(got, "token=live-token") || !strings.Contains(got, `{"model":"live"}`) || strings.Contains(got, "root/sudo") {
+			t.Errorf("claude: %q", got)
+		}
+	}
 	// The same host key (FixedHostKey) and the home folder kept.
 	if got := session("cat ~/marker; ls -la ~; df -h ~; mount | grep /home/dev"); !strings.HasPrefix(got, "kept\n") {
 		t.Errorf("after a restart: %q", got)

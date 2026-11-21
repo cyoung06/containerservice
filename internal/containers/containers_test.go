@@ -25,8 +25,15 @@ import (
 )
 
 type fakeKeys struct {
-	mu    sync.Mutex
-	lines []string
+	mu              sync.Mutex
+	lines           []string
+	token, settings string
+}
+
+func (f *fakeKeys) ClaudeConfig(context.Context) (string, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.token, f.settings, nil
 }
 
 func (f *fakeKeys) KeyLines(context.Context) ([]string, error) {
@@ -92,6 +99,10 @@ func TestCheck(t *testing.T) {
 		"neither kind":     {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/a"}}},
 		"sized volume":     {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/a", Volume: "w", SizeMiB: 5}}},
 		"tiny memory":      {Name: "pwn", Image: "ubuntu", MemoryMiB: 10},
+		"huge disk":        {Name: "pwn", Image: "ubuntu", DiskGiB: 101},
+		"claude path":      {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/etc/claude-code", Volume: "w"}}},
+		"login path":       {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/etc/containerservice-claude", Volume: "w"}}},
+		"negative disk":    {Name: "pwn", Image: "ubuntu", DiskGiB: -1},
 		"host key path":    {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/etc/containerservice-host/x", Volume: "w"}}},
 		"new without size": {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/a", Volume: "w", New: &NewVolume{}}}},
 		"new temp":         {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/a", Volume: "w", Temp: true, New: &NewVolume{SizeGiB: 1}}}},
@@ -108,7 +119,7 @@ func TestCheck(t *testing.T) {
 func TestCreateMakesTheStatefulSet(t *testing.T) {
 	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "work", Namespace: "cs", Labels: map[string]string{ManagedBy: managedByValue}}}
 	s, client, _ := newService(t, pvc)
-	sp := Spec{Name: "pwn", Image: "oci.syeyoung.dev/me/pwn:1", CPUMillis: 2000, MemoryMiB: 4096,
+	sp := Spec{Name: "pwn", Image: "oci.syeyoung.dev/me/pwn:1", CPUMillis: 2000, MemoryMiB: 4096, DiskGiB: 30, Debug: true, ClaudeLogin: true,
 		Mounts: []Mount{{Path: "/work", Volume: "work"}, {Path: "/scratch", Temp: true, SizeMiB: 1024}}}
 	c, err := s.Create(context.Background(), sp)
 	if err != nil {
@@ -157,6 +168,63 @@ func TestCreateMakesTheStatefulSet(t *testing.T) {
 	}
 	if _, err := s.Create(context.Background(), sp); status(err) != http.StatusConflict {
 		t.Errorf("second create: %v, want a 409", err)
+	}
+}
+
+func TestHardenedByDefault(t *testing.T) {
+	s, client, _ := newService(t)
+	if _, err := s.Create(context.Background(), Spec{Name: "agent", Image: "ubuntu"}); err != nil {
+		t.Fatal(err)
+	}
+	set, err := client.AppsV1().StatefulSets("cs").Get(context.Background(), "agent", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := set.Spec.Template.Spec.Containers[0].SecurityContext
+	if sc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault || len(sc.Capabilities.Add) != 0 ||
+		!reflect.DeepEqual(sc.Capabilities.Drop, []corev1.Capability{"NET_RAW", "MKNOD"}) || sc.Privileged != nil {
+		t.Errorf("security context: %+v", sc)
+	}
+	if _, ok := set.Spec.Template.Labels[DebugLabel]; ok {
+		t.Error("a hardened pod carries the debug label")
+	}
+	got := specOf(set)
+	if got.Debug || got.DiskGiB != DefaultDiskGiB {
+		t.Errorf("read back: debug %v, disk %d GiB (want the default %d)", got.Debug, got.DiskGiB, DefaultDiskGiB)
+	}
+	if q := set.Spec.Template.Spec.Containers[0].Resources.Limits[corev1.ResourceEphemeralStorage]; q.Value() != DefaultDiskGiB<<30 {
+		t.Errorf("ephemeral-storage limit %s", q.String())
+	}
+	if got.ClaudeLogin {
+		t.Error("claude login without asking")
+	}
+	if q := set.Spec.Template.Spec.Containers[0].Resources.Requests[corev1.ResourceEphemeralStorage]; q.Value() != 1<<30 {
+		t.Errorf("ephemeral-storage request %s, want 1Gi", q.String())
+	}
+}
+
+func TestSyncClaude(t *testing.T) {
+	s, client, keys := newService(t)
+	ctx := context.Background()
+	keys.token, keys.settings = "sk-ant-oat01-x", `{"model":"opus"}`
+	for i := 0; i < 2; i++ { // the second run finds both current
+		if err := s.SyncClaude(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sec, _ := client.CoreV1().Secrets("cs").Get(ctx, ClaudeLoginSecret, metav1.GetOptions{})
+	cm, _ := client.CoreV1().ConfigMaps("cs").Get(ctx, ClaudeSettingsConfigMap, metav1.GetOptions{})
+	if string(sec.Data["token"]) != keys.token || cm.Data["console.json"] != keys.settings {
+		t.Fatalf("secret %q, configmap %q", sec.Data["token"], cm.Data["console.json"])
+	}
+	keys.token, keys.settings = "", ""
+	if err := s.SyncClaude(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sec, _ = client.CoreV1().Secrets("cs").Get(ctx, ClaudeLoginSecret, metav1.GetOptions{})
+	cm, _ = client.CoreV1().ConfigMaps("cs").Get(ctx, ClaudeSettingsConfigMap, metav1.GetOptions{})
+	if len(sec.Data["token"]) != 0 || cm.Data["console.json"] != "{}" {
+		t.Fatalf("after clearing: secret %q, configmap %q", sec.Data["token"], cm.Data["console.json"])
 	}
 }
 

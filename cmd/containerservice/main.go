@@ -121,9 +121,13 @@ func main() {
 		log.Error("containers", "err", err)
 		os.Exit(1)
 	}
-	// The Secret follows the database; a sync that failed after a key change is redone here.
+	// The Secrets follow the database; a sync that failed after a change is redone here.
 	if err := svc.SyncKeys(ctx); err != nil {
 		log.Error("syncing the SSH keys", "err", err)
+		os.Exit(1)
+	}
+	if err := svc.SyncClaude(ctx); err != nil {
+		log.Error("syncing the Claude login and settings", "err", err)
 		os.Exit(1)
 	}
 	term, err := terminal.New(kube, kube.Host)

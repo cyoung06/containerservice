@@ -1,5 +1,5 @@
-// Package store is containerservice's own data in Postgres: the owner's SSH keys. Containers and
-// volumes are Kubernetes objects and live only there.
+// Package store is containerservice's own data in Postgres: the owner's SSH keys, and Claude Code
+// login and settings. Containers and volumes are Kubernetes objects and live only there.
 package store
 
 import (
@@ -149,4 +149,39 @@ func (p *Postgres) KeyLines(ctx context.Context) ([]string, error) {
 		lines[i] = k.Line
 	}
 	return lines, nil
+}
+
+// Claude is the owner's Claude Code login and shared settings.
+type Claude struct {
+	// Token is a long-lived OAuth token ("" if none); TokenAt when it was set.
+	Token   string
+	TokenAt *time.Time
+	// Settings is managed-settings JSON ("" if none).
+	Settings   string
+	SettingsAt *time.Time
+}
+
+// Claude reads the login and settings.
+func (p *Postgres) Claude(ctx context.Context) (Claude, error) {
+	var c Claude
+	err := p.pool.QueryRow(ctx, `SELECT token, token_at, settings, settings_at FROM claude WHERE id = 1`).Scan(&c.Token, &c.TokenAt, &c.Settings, &c.SettingsAt)
+	return c, err
+}
+
+// SetClaudeToken replaces the token ("" removes it).
+func (p *Postgres) SetClaudeToken(ctx context.Context, token string) error {
+	_, err := p.pool.Exec(ctx, `UPDATE claude SET token = $1, token_at = CASE WHEN $1 = '' THEN NULL ELSE now() END WHERE id = 1`, token)
+	return err
+}
+
+// SetClaudeSettings replaces the settings JSON ("" removes it).
+func (p *Postgres) SetClaudeSettings(ctx context.Context, settings string) error {
+	_, err := p.pool.Exec(ctx, `UPDATE claude SET settings = $1, settings_at = CASE WHEN $1 = '' THEN NULL ELSE now() END WHERE id = 1`, settings)
+	return err
+}
+
+// ClaudeConfig is the token and settings, for the containers.
+func (p *Postgres) ClaudeConfig(ctx context.Context) (string, string, error) {
+	c, err := p.Claude(ctx)
+	return c.Token, c.Settings, err
 }

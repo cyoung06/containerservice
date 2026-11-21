@@ -27,6 +27,20 @@ export type Spec = {
   /** Limits; 0: none. */
   readonly cpuMillis: number;
   readonly memoryMiB: number;
+  /** Caps the container's own disk use (root filesystem, temporary folders); 0 on a create: 20 GiB. */
+  readonly diskGiB: number;
+  /** Debuggers: ptrace and no seccomp filter. Off: hardened. */
+  readonly debug: boolean;
+  /** Mounts the shared Claude Code token (CLAUDE_CODE_OAUTH_TOKEN in the claude image). */
+  readonly claudeLogin: boolean;
+};
+
+/** The Claude page: whether a token is set (it's never sent back) and the shared settings JSON. */
+export type ClaudeInfo = {
+  readonly tokenSet: boolean;
+  readonly tokenAt: string | null;
+  readonly settings: string;
+  readonly settingsAt: string | null;
 };
 
 export type Container = Spec & {

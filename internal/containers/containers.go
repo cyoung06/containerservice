@@ -30,6 +30,16 @@ type Spec struct {
 	// CPUMillis and MemoryMiB are limits; 0: none.
 	CPUMillis int `json:"cpuMillis"`
 	MemoryMiB int `json:"memoryMiB"`
+	// DiskGiB caps the container's own disk use (its root filesystem, temporary folders and
+	// logs, all on the node's disk); 0 on a create: DefaultDiskGiB. Past it, the pod is evicted.
+	DiskGiB int `json:"diskGiB"`
+	// Debug is for debuggers: ptrace and no seccomp filter. Without it a container is hardened:
+	// the runtime's default seccomp profile, no raw sockets or device nodes, and (a network policy
+	// on DebugLabel) no traffic to the other pods of the namespace but from the bastion.
+	Debug bool `json:"debug"`
+	// ClaudeLogin mounts the owner's Claude Code token at ClaudeLoginPath (the claude image
+	// exports it as CLAUDE_CODE_OAUTH_TOKEN). Every container gets the shared settings.
+	ClaudeLogin bool `json:"claudeLogin"`
 }
 
 // Mount is a volume (a PVC by name) or a temporary folder (Temp) at Path.
@@ -68,6 +78,12 @@ type Container struct {
 const (
 	maxMounts = 16
 	maxImage  = 512
+	// DefaultDiskGiB and MaxDiskGiB bound DiskGiB.
+	DefaultDiskGiB = 20
+	MaxDiskGiB     = 100
+	// DebugLabel marks a debugging container's pod; the network policy that keeps hardened ones
+	// to themselves selects pods without it.
+	DebugLabel = "containerservice.syeyoung.dev/debug"
 )
 
 // A StatefulSet's name goes into its pods' controller-revision-hash label (name + "-" + 10
@@ -92,6 +108,12 @@ func (sp *Spec) Check() error {
 	if sp.CPUMillis < 0 || sp.MemoryMiB < 0 || (sp.MemoryMiB > 0 && sp.MemoryMiB < 64) {
 		return refuse(http.StatusBadRequest, "Limits are 0 (none) or positive; memory at least 64 MiB.")
 	}
+	if sp.DiskGiB == 0 {
+		sp.DiskGiB = DefaultDiskGiB
+	}
+	if sp.DiskGiB < 1 || sp.DiskGiB > MaxDiskGiB {
+		return refuse(http.StatusBadRequest, "The disk limit is 1–%d GiB.", MaxDiskGiB)
+	}
 	if len(sp.Mounts) > maxMounts {
 		return refuse(http.StatusBadRequest, "At most %d mounts.", maxMounts)
 	}
@@ -101,7 +123,7 @@ func (sp *Spec) Check() error {
 		if !strings.HasPrefix(m.Path, "/") || path.Clean(m.Path) != m.Path || m.Path == "/" || len(m.Path) > 256 || strings.ContainsAny(m.Path, ":\x00\n") {
 			return refuse(http.StatusBadRequest, "Mount path %q: an absolute, clean path other than /.", m.Path)
 		}
-		for _, reserved := range []string{KeysPath, HostKeyPath} {
+		for _, reserved := range []string{KeysPath, HostKeyPath, ClaudeLoginPath, "/etc/claude-code"} {
 			if m.Path == reserved || strings.HasPrefix(m.Path, reserved+"/") || strings.HasPrefix(reserved, m.Path+"/") {
 				return refuse(http.StatusBadRequest, "Mount path %q overlaps %s, where the SSH keys go.", m.Path, reserved)
 			}
@@ -140,12 +162,23 @@ func (sp *Spec) Check() error {
 // statefulSet is the object a spec becomes.
 func (s *Service) statefulSet(sp Spec) *appsv1.StatefulSet {
 	podLabels := map[string]string{ManagedBy: managedByValue, NameLabel: sp.Name}
+	if sp.Debug {
+		podLabels[DebugLabel] = "true"
+	}
 	volumes := []corev1.Volume{{Name: "authorized-keys", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 		SecretName: KeysSecret, DefaultMode: ptr.To[int32](0o644), Optional: ptr.To(true)}}}}
 	// The pod waits for its host key Secret, made right after the StatefulSet.
 	volumes = append(volumes, corev1.Volume{Name: "host-key", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 		SecretName: HostKeySecret(sp.Name), DefaultMode: ptr.To[int32](0o400)}}})
 	mounts := []corev1.VolumeMount{{Name: "authorized-keys", MountPath: KeysPath, ReadOnly: true}, {Name: "host-key", MountPath: HostKeyPath, ReadOnly: true}}
+	volumes = append(volumes, corev1.Volume{Name: "claude-settings", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+		LocalObjectReference: corev1.LocalObjectReference{Name: ClaudeSettingsConfigMap}, DefaultMode: ptr.To[int32](0o644), Optional: ptr.To(true)}}})
+	mounts = append(mounts, corev1.VolumeMount{Name: "claude-settings", MountPath: ClaudeSettingsPath, ReadOnly: true})
+	if sp.ClaudeLogin {
+		volumes = append(volumes, corev1.Volume{Name: "claude-login", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+			SecretName: ClaudeLoginSecret, DefaultMode: ptr.To[int32](0o644), Optional: ptr.To(true)}}})
+		mounts = append(mounts, corev1.VolumeMount{Name: "claude-login", MountPath: ClaudeLoginPath, ReadOnly: true})
+	}
 	for i, m := range sp.Mounts {
 		name := fmt.Sprintf("m%d", i)
 		var src corev1.VolumeSource
@@ -160,12 +193,33 @@ func (s *Service) statefulSet(sp Spec) *appsv1.StatefulSet {
 		volumes = append(volumes, corev1.Volume{Name: name, VolumeSource: src})
 		mounts = append(mounts, corev1.VolumeMount{Name: name, MountPath: m.Path, ReadOnly: m.ReadOnly})
 	}
-	limits := corev1.ResourceList{}
+	// Limits cap; requests are what the scheduler sets aside, kept small (left unset, they'd copy
+	// the limits, and a few containers would fill the node on paper).
+	limits, requests := corev1.ResourceList{}, corev1.ResourceList{}
 	if sp.CPUMillis > 0 {
 		limits[corev1.ResourceCPU] = *resource.NewMilliQuantity(int64(sp.CPUMillis), resource.DecimalSI)
+		requests[corev1.ResourceCPU] = *resource.NewMilliQuantity(int64(min(sp.CPUMillis, 100)), resource.DecimalSI)
 	}
 	if sp.MemoryMiB > 0 {
 		limits[corev1.ResourceMemory] = *resource.NewQuantity(int64(sp.MemoryMiB)<<20, resource.BinarySI)
+		requests[corev1.ResourceMemory] = *resource.NewQuantity(int64(min(sp.MemoryMiB, 256))<<20, resource.BinarySI)
+	}
+	if sp.DiskGiB > 0 {
+		limits[corev1.ResourceEphemeralStorage] = *resource.NewQuantity(int64(sp.DiskGiB)<<30, resource.BinarySI)
+		requests[corev1.ResourceEphemeralStorage] = *resource.NewQuantity(1<<30, resource.BinarySI)
+	}
+	// Hardened: the runtime's default seccomp profile (no nested user namespaces, ptrace, bpf,
+	// ...), no raw sockets or device nodes. Debugging: ptrace, and personality(ADDR_NO_RANDOMIZE),
+	// which the default profile refuses. Never privileged.
+	security := &corev1.SecurityContext{
+		Capabilities:   &corev1.Capabilities{Drop: []corev1.Capability{"NET_RAW", "MKNOD"}},
+		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+	if sp.Debug {
+		security = &corev1.SecurityContext{
+			Capabilities:   &corev1.Capabilities{Add: []corev1.Capability{"SYS_PTRACE"}},
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeUnconfined},
+		}
 	}
 	pod := corev1.PodSpec{
 		// Root inside is root of the pod's own user namespace only.
@@ -173,16 +227,11 @@ func (s *Service) statefulSet(sp Spec) *appsv1.StatefulSet {
 		AutomountServiceAccountToken: ptr.To(false),
 		EnableServiceLinks:           ptr.To(false),
 		Containers: []corev1.Container{{
-			Name:         MainContainer,
-			Image:        sp.Image,
-			VolumeMounts: mounts,
-			Resources:    corev1.ResourceRequirements{Limits: limits},
-			SecurityContext: &corev1.SecurityContext{
-				// Debuggers: ptrace, and personality(ADDR_NO_RANDOMIZE), which the runtime's default
-				// seccomp profile refuses. Never privileged.
-				Capabilities:   &corev1.Capabilities{Add: []corev1.Capability{"SYS_PTRACE"}},
-				SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeUnconfined},
-			},
+			Name:            MainContainer,
+			Image:           sp.Image,
+			VolumeMounts:    mounts,
+			Resources:       corev1.ResourceRequirements{Limits: limits, Requests: requests},
+			SecurityContext: security,
 		}},
 		Volumes: volumes,
 	}
@@ -221,6 +270,10 @@ func specOf(set *appsv1.StatefulSet) Spec {
 	if q, ok := main.Resources.Limits[corev1.ResourceMemory]; ok {
 		sp.MemoryMiB = int(q.Value() >> 20)
 	}
+	if q, ok := main.Resources.Limits[corev1.ResourceEphemeralStorage]; ok {
+		sp.DiskGiB = int(q.Value() >> 30)
+	}
+	sp.Debug = set.Spec.Template.Labels[DebugLabel] == "true"
 	vols := map[string]corev1.Volume{}
 	for _, v := range pod.Volumes {
 		vols[v.Name] = v
@@ -229,7 +282,9 @@ func specOf(set *appsv1.StatefulSet) Spec {
 	for _, vm := range main.VolumeMounts {
 		v, ok := vols[vm.Name]
 		switch {
-		case !ok || vm.MountPath == KeysPath || vm.MountPath == HostKeyPath:
+		case vm.MountPath == ClaudeLoginPath:
+			sp.ClaudeLogin = true
+		case !ok || vm.MountPath == KeysPath || vm.MountPath == HostKeyPath || vm.MountPath == ClaudeSettingsPath:
 		case v.PersistentVolumeClaim != nil:
 			sp.Mounts = append(sp.Mounts, Mount{Path: vm.MountPath, Volume: v.PersistentVolumeClaim.ClaimName, ReadOnly: vm.ReadOnly})
 		case v.EmptyDir != nil:

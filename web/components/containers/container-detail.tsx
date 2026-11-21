@@ -164,6 +164,13 @@ export const ContainerDetail = () => {
                 ["State", <ContainerStateBadge key="state" container={container} />],
                 ["Image", <span key="image" className="font-mono text-xs">{container.image}</span>],
                 ["Limits", formatLimits(container)],
+                [
+                  "Security",
+                  container.debug
+                    ? "Debugging: ptrace, no seccomp filter"
+                    : "Hardened: default seccomp profile, no raw sockets, no traffic to other containers",
+                ],
+                ["Claude login", container.claudeLogin ? "Shared token mounted" : null],
                 ["Restarts", container.restarts > 0 ? String(container.restarts) : null],
                 ["Address", <span key="host" className="font-mono text-xs">{container.host}{container.ip ? ` (${container.ip})` : ""}</span>],
                 ["Created", formatTime(container.createdAt)],

@@ -21,11 +21,18 @@ rules:
     resources: [persistentvolumeclaims]
     verbs: [get, list, watch, create, patch, delete]
   - apiGroups: [""]
-    resources: [secrets]            # authorized-keys only; create can't be limited by name
+    resources: [secrets]            # authorized-keys, claude-login, <container>-hostkey; create can't be limited by name
     verbs: [create]
   - apiGroups: [""]
     resources: [secrets]
-    resourceNames: [authorized-keys]
+    resourceNames: [authorized-keys, claude-login]
+    verbs: [get, update]
+  - apiGroups: [""]
+    resources: [configmaps]         # claude-settings only; create can't be limited by name
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [claude-settings]
     verbs: [get, update]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

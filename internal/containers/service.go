@@ -44,6 +44,14 @@ const (
 	// HostKeyPath is where a container sees its own SSH host key, kept across restarts in the
 	// Secret HostKeySecret(name): HostKeyPath/ssh_host_ed25519_key (and .pub).
 	HostKeyPath = "/etc/containerservice-host"
+	// ClaudeLoginSecret holds the owner's Claude Code token ("token"), mounted at ClaudeLoginPath
+	// in containers that ask for it.
+	ClaudeLoginSecret = "claude-login"
+	ClaudeLoginPath   = "/etc/containerservice-claude"
+	// ClaudeSettingsConfigMap holds the shared settings ("console.json"), mounted in every
+	// container at ClaudeSettingsPath, Claude Code's managed settings drop-in directory.
+	ClaudeSettingsConfigMap = "claude-settings"
+	ClaudeSettingsPath      = "/etc/claude-code/managed-settings.d"
 )
 
 // Error is a request refused, with the status and message to show.
@@ -65,9 +73,11 @@ type Config struct {
 	PullSecret string
 }
 
-// Keys is where the SSH keys are read from (the database).
+// Keys is where the SSH keys and the Claude login and settings are read from (the database).
 type Keys interface {
 	KeyLines(ctx context.Context) ([]string, error)
+	// ClaudeConfig is the Claude Code token and settings JSON ("" for none).
+	ClaudeConfig(ctx context.Context) (token, settings string, err error)
 }
 
 // Service manages the containers and volumes.
