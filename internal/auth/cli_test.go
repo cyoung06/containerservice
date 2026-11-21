@@ -4,11 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -44,21 +46,30 @@ func TestCLISignIn(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `method="post"`) {
 		t.Fatalf("confirm page: %d", w.Code)
 	}
+	// What the page's form submits, read from the page itself.
+	form := url.Values{}
+	for _, m := range regexp.MustCompile(`<input type="hidden" name="(\w+)" value="([^"]*)">`).FindAllStringSubmatch(w.Body.String(), -1) {
+		form.Set(m[1], html.UnescapeString(m[2]))
+	}
+	if form.Encode() != q {
+		t.Fatalf("the form posts %q, not %q", form.Encode(), q)
+	}
+	post := func(origin string) *http.Request {
+		r := httptest.NewRequest("POST", "/cli/login", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+		r.Header.Set("Origin", origin)
+		return r
+	}
 	// A POST from another site is refused.
-	r = httptest.NewRequest("POST", "/cli/login?"+q, nil)
-	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
-	r.Header.Set("Origin", "https://evil.example")
 	w = httptest.NewRecorder()
-	h.ServeHTTP(w, r)
+	h.ServeHTTP(w, post("https://evil.example"))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("cross-site confirm: %d", w.Code)
 	}
 	// Confirmed: a code to the loopback listener.
-	r = httptest.NewRequest("POST", "/cli/login?"+q, nil)
-	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
-	r.Header.Set("Origin", "https://cs.example")
 	w = httptest.NewRecorder()
-	h.ServeHTTP(w, r)
+	h.ServeHTTP(w, post("https://cs.example"))
 	loc, _ := url.Parse(w.Header().Get("Location"))
 	if w.Code != http.StatusSeeOther || loc.Host != "127.0.0.1:54321" || loc.Path != "/callback" || loc.Query().Get("state") != "state-1234567890ab" {
 		t.Fatalf("redirect: %d %s", w.Code, loc)

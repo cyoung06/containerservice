@@ -5,7 +5,7 @@ package auth
 //
 //  1. cs opens GET /cli/login?port=P&challenge=C&state=S in the browser (C = base64url(SHA-256(V))
 //     of a verifier V only cs knows). Without a session, the browser signs in as usual first.
-//  2. The page asks to confirm; the POST seals a code {session, C, expiry} and redirects to
+//  2. The page asks to confirm (a form posting port, challenge and state); the POST seals a code {session, C, expiry} and redirects to
 //     http://127.0.0.1:P/callback?code=…&state=S.
 //  3. cs POSTs {code, verifier: V} to /cli/token and gets a bearer token: a session like the
 //     cookie's, sealed for "cli", that the API takes as Authorization: Bearer.
@@ -60,11 +60,11 @@ var confirmPage = template.Must(template.New("").Parse(`<!doctype html>
 @media(prefers-color-scheme:dark){body{background:#111;color:#ddd}}button{font:inherit;padding:.5rem 1rem;cursor:pointer}</style></head>
 <body><h1>Sign in cs?</h1>
 <p>The command-line client on this computer asks to act as <b>{{.User}}</b> on {{.Origin}}. Continue only if you just ran <code>cs login</code>.</p>
-<form method="post" action="/cli/login?{{.Query}}"><button type="submit">Sign in cs</button></form>
+<form method="post" action="/cli/login"><input type="hidden" name="port" value="{{.Port}}"><input type="hidden" name="challenge" value="{{.Challenge}}"><input type="hidden" name="state" value="{{.State}}"><button type="submit">Sign in cs</button></form>
 </body></html>`))
 
 func (a *Auth) cliLogin(w http.ResponseWriter, r *http.Request) {
-	_, _, _, ok := cliParams(r.URL.Query())
+	port, challenge, state, ok := cliParams(r.URL.Query())
 	if !ok {
 		a.refuse(w, http.StatusBadRequest, "This isn't a sign-in from cs (bad port, challenge or state).")
 		return
@@ -78,11 +78,13 @@ func (a *Auth) cliLogin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	// The form posts here, and the answer redirects to the loopback listener: both form targets.
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' http://127.0.0.1:*; frame-ancestors 'none'; base-uri 'none'")
-	confirmPage.Execute(w, map[string]string{"User": s.Username, "Origin": a.cfg.Origin, "Query": r.URL.RawQuery})
+	confirmPage.Execute(w, map[string]any{"User": s.Username, "Origin": a.cfg.Origin, "Port": port, "Challenge": challenge, "State": state})
 }
 
 func (a *Auth) cliConfirm(w http.ResponseWriter, r *http.Request) {
-	port, challenge, state, ok := cliParams(r.URL.Query())
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	r.ParseForm()
+	port, challenge, state, ok := cliParams(r.PostForm)
 	s, signedIn := a.cookieSession(r)
 	// A cross-site POST: browsers send no Lax cookie with it, and Origin, when sent, must be ours.
 	if o := r.Header.Get("Origin"); o != "" && o != a.cfg.Origin {
