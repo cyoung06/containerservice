@@ -131,6 +131,9 @@ func (a *Auth) authorize(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	// The form posts here and the answer redirects to the loopback listener: both form targets.
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' http://127.0.0.1:* http://[::1]:*; frame-ancestors 'none'; base-uri 'none'")
+	// The service's no-referrer makes browsers send "Origin: null" with the form, which decide
+	// refuses; same-origin keeps the real Origin on the POST and still no referrer elsewhere.
+	w.Header().Set("Referrer-Policy", "same-origin")
 	allowPage.Execute(w, map[string]string{"User": s.Username, "Origin": a.cfg.Origin, "ClientID": ClientID,
 		"RedirectURI": req.RedirectURI, "Challenge": req.Challenge, "State": req.State})
 }

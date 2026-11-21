@@ -43,6 +43,9 @@ func allowForm(t *testing.T, h http.Handler, cookie string, q url.Values) url.Va
 	if w.Code != 200 {
 		t.Fatalf("allow page: %d %s", w.Code, w.Body)
 	}
+	if p := w.Header().Get("Referrer-Policy"); p != "same-origin" {
+		t.Errorf("the allow page's Referrer-Policy is %q: with no-referrer browsers post Origin: null", p)
+	}
 	form := url.Values{}
 	for _, m := range regexp.MustCompile(`<input type="hidden" name="(\w+)" value="([^"]*)">`).FindAllStringSubmatch(w.Body.String(), -1) {
 		form.Set(m[1], html.UnescapeString(m[2]))
