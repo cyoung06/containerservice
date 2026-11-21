@@ -114,14 +114,14 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Auth, error) {
 	}, nil
 }
 
-// Routes adds /auth/login, /auth/callback and /auth/logout, and cs's sign-in (cli.go).
+// Routes adds /auth/login, /auth/callback and /auth/logout, and OAuth for cs (cli.go).
 func (a *Auth) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /auth/login", a.login)
 	mux.HandleFunc("GET /auth/callback", a.callback)
 	mux.HandleFunc("POST /auth/logout", a.logout)
-	mux.HandleFunc("GET /cli/login", a.cliLogin)
-	mux.HandleFunc("POST /cli/login", a.cliConfirm)
-	mux.HandleFunc("POST /cli/token", a.cliExchange)
+	mux.HandleFunc("GET /oauth/authorize", a.authorize)
+	mux.HandleFunc("POST /oauth/authorize", a.decide)
+	mux.HandleFunc("POST /oauth/token", a.token)
 }
 
 // Session returns the request's session, or false if there is none or it has expired: from an

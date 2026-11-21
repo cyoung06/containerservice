@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-func cliAuth(t *testing.T) (*Auth, http.Handler, string) {
+func oauthAuth(t *testing.T) (*Auth, http.Handler, string) {
 	a := testAuth(t)
 	a.cfg = Config{Origin: "https://cs.example", Lifetime: time.Hour}
 	a.log = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -26,78 +26,110 @@ func cliAuth(t *testing.T) (*Auth, http.Handler, string) {
 	return a, mux, cookie
 }
 
-func TestCLISignIn(t *testing.T) {
-	a, h, cookie := cliAuth(t)
-	verifier := strings.Repeat("v", 50)
-	sum := sha256.Sum256([]byte(verifier))
-	q := url.Values{"port": {"54321"}, "challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "state": {"state-1234567890ab"}}.Encode()
+const redirect = "http://127.0.0.1:64027/callback"
 
-	// Not signed in: the usual sign-in first, coming back here.
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/cli/login?"+q, nil))
-	if w.Code != http.StatusFound || !strings.HasPrefix(w.Header().Get("Location"), "/auth/login?next=%2Fcli%2Flogin%3F") {
-		t.Fatalf("unsigned: %d %s", w.Code, w.Header().Get("Location"))
-	}
-	// Signed in: a page to confirm, not a code.
-	r := httptest.NewRequest("GET", "/cli/login?"+q, nil)
+func authorizeQuery(verifier string) url.Values {
+	sum := sha256.Sum256([]byte(verifier))
+	return url.Values{"response_type": {"code"}, "client_id": {"cs"}, "redirect_uri": {redirect},
+		"code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"}, "state": {"st-123"}}
+}
+
+// allowForm is what the allow page's form submits, read from the page.
+func allowForm(t *testing.T, h http.Handler, cookie string, q url.Values) url.Values {
+	r := httptest.NewRequest("GET", "/oauth/authorize?"+q.Encode(), nil)
 	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
-	w = httptest.NewRecorder()
+	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `method="post"`) {
-		t.Fatalf("confirm page: %d", w.Code)
+	if w.Code != 200 {
+		t.Fatalf("allow page: %d %s", w.Code, w.Body)
 	}
-	// What the page's form submits, read from the page itself.
 	form := url.Values{}
 	for _, m := range regexp.MustCompile(`<input type="hidden" name="(\w+)" value="([^"]*)">`).FindAllStringSubmatch(w.Body.String(), -1) {
 		form.Set(m[1], html.UnescapeString(m[2]))
 	}
-	if form.Encode() != q {
-		t.Fatalf("the form posts %q, not %q", form.Encode(), q)
-	}
-	post := func(origin string) *http.Request {
-		r := httptest.NewRequest("POST", "/cli/login", strings.NewReader(form.Encode()))
-		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return form
+}
+
+func post(h http.Handler, path string, form url.Values, cookie, origin string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest("POST", path, strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if cookie != "" {
 		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+	}
+	if origin != "" {
 		r.Header.Set("Origin", origin)
-		return r
 	}
-	// A POST from another site is refused.
-	w = httptest.NewRecorder()
-	h.ServeHTTP(w, post("https://evil.example"))
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("cross-site confirm: %d", w.Code)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+func TestOAuthCodeFlow(t *testing.T) {
+	a, h, cookie := oauthAuth(t)
+	verifier := strings.Repeat("v", 50)
+	q := authorizeQuery(verifier)
+
+	// Not signed in: the usual sign-in first, coming back here.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/oauth/authorize?"+q.Encode(), nil))
+	if w.Code != http.StatusFound || !strings.HasPrefix(w.Header().Get("Location"), "/auth/login?next=%2Foauth%2Fauthorize%3F") {
+		t.Fatalf("unsigned: %d %s", w.Code, w.Header().Get("Location"))
 	}
-	// Confirmed: a code to the loopback listener.
-	w = httptest.NewRecorder()
-	h.ServeHTTP(w, post("https://cs.example"))
+	form := allowForm(t, h, cookie, q)
+	if form.Encode() != q.Encode() {
+		t.Fatalf("the page posts %q, not the request %q", form.Encode(), q.Encode())
+	}
+	form.Set("decision", "allow")
+	if w := post(h, "/oauth/authorize", form, cookie, "https://evil.example"); w.Code != http.StatusForbidden {
+		t.Errorf("cross-site allow: %d", w.Code)
+	}
+	if w := post(h, "/oauth/authorize", form, "", "https://cs.example"); w.Code != http.StatusUnauthorized {
+		t.Errorf("allow without a session: %d", w.Code)
+	}
+	w = post(h, "/oauth/authorize", form, cookie, "https://cs.example")
 	loc, _ := url.Parse(w.Header().Get("Location"))
-	if w.Code != http.StatusSeeOther || loc.Host != "127.0.0.1:54321" || loc.Path != "/callback" || loc.Query().Get("state") != "state-1234567890ab" {
+	if w.Code != http.StatusSeeOther || loc.Scheme+"://"+loc.Host+loc.Path != redirect || loc.Query().Get("state") != "st-123" || loc.Query().Get("code") == "" {
 		t.Fatalf("redirect: %d %s", w.Code, loc)
 	}
-	exchange := func(code, verifier string) *httptest.ResponseRecorder {
-		body, _ := json.Marshal(map[string]string{"code": code, "verifier": verifier})
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest("POST", "/cli/token", strings.NewReader(string(body))))
-		return w
+	tokenForm := func(change map[string]string) url.Values {
+		f := url.Values{"grant_type": {"authorization_code"}, "code": {loc.Query().Get("code")}, "redirect_uri": {redirect}, "client_id": {"cs"}, "code_verifier": {verifier}}
+		for k, v := range change {
+			f.Set(k, v)
+		}
+		return f
 	}
-	if w := exchange(loc.Query().Get("code"), strings.Repeat("x", 50)); w.Code != http.StatusBadRequest {
-		t.Errorf("wrong verifier: %d", w.Code)
+	for what, change := range map[string]map[string]string{
+		"wrong verifier": {"code_verifier": strings.Repeat("x", 50)},
+		"other redirect": {"redirect_uri": "http://127.0.0.1:1/callback"},
+		"other client":   {"client_id": "evil"},
+		"other grant":    {"grant_type": "password"},
+		"forged code":    {"code": "nope"},
+	} {
+		w := post(h, "/oauth/token", tokenForm(change), "", "")
+		var e struct{ Error string }
+		json.Unmarshal(w.Body.Bytes(), &e)
+		if w.Code != http.StatusBadRequest || e.Error == "" {
+			t.Errorf("%s: %d %s", what, w.Code, w.Body)
+		}
 	}
-	w = exchange(loc.Query().Get("code"), verifier)
-	var got struct{ Token, Username string }
+	w = post(h, "/oauth/token", tokenForm(nil), "", "")
+	var got struct {
+		AccessToken string `json:"access_token"`
+		TokenType   string `json:"token_type"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
 	json.Unmarshal(w.Body.Bytes(), &got)
-	if w.Code != 200 || got.Username != "me" || got.Token == "" {
-		t.Fatalf("exchange: %d %s", w.Code, w.Body)
+	if w.Code != 200 || got.TokenType != "Bearer" || got.AccessToken == "" || got.ExpiresIn < 3500 || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("token: %d %s", w.Code, w.Body)
 	}
-	// The token is a session as a bearer, and only as one: not as the cookie, and the cookie's
-	// value isn't a bearer token.
-	r = httptest.NewRequest("GET", "/api/session", nil)
-	r.Header.Set("Authorization", "Bearer "+got.Token)
+	// The access token is a session as a bearer, and only as one.
+	r := httptest.NewRequest("GET", "/api/session", nil)
+	r.Header.Set("Authorization", "Bearer "+got.AccessToken)
 	if s, ok := a.Session(r); !ok || s.Username != "me" || !HasBearer(r) {
 		t.Errorf("bearer session: %v %+v", ok, s)
 	}
-	if _, ok := a.Session(withCookie(sessionCookie, got.Token)); ok {
-		t.Error("the cs token works as a cookie")
+	if _, ok := a.Session(withCookie(sessionCookie, got.AccessToken)); ok {
+		t.Error("the access token works as a cookie")
 	}
 	r = httptest.NewRequest("GET", "/api/session", nil)
 	r.Header.Set("Authorization", "Bearer "+cookie)
@@ -106,19 +138,48 @@ func TestCLISignIn(t *testing.T) {
 	}
 }
 
-func TestCLIParams(t *testing.T) {
-	good := url.Values{"port": {"54321"}, "challenge": {strings.Repeat("c", 43)}, "state": {strings.Repeat("s", 16)}}
-	if _, _, _, ok := cliParams(good); !ok {
-		t.Fatal("good params refused")
+func TestOAuthDenyAndBadRequests(t *testing.T) {
+	_, h, cookie := oauthAuth(t)
+	q := authorizeQuery(strings.Repeat("v", 50))
+	form := allowForm(t, h, cookie, q)
+	form.Set("decision", "deny")
+	w := post(h, "/oauth/authorize", form, cookie, "https://cs.example")
+	if loc, _ := url.Parse(w.Header().Get("Location")); loc.Query().Get("error") != "access_denied" || loc.Query().Get("state") != "st-123" {
+		t.Errorf("deny: %d %s", w.Code, w.Header().Get("Location"))
 	}
-	for key, bad := range map[string]string{"port": "80", "challenge": "short", "state": "has space and more"} {
-		v := url.Values{}
-		for k, vs := range good {
-			v[k] = vs
+	// Never redirected to: a foreign client or a redirect that isn't loopback /callback.
+	for _, bad := range []map[string]string{
+		{"client_id": "evil"},
+		{"redirect_uri": "https://evil.example/callback"},
+		{"redirect_uri": "http://localhost:64027/callback"},
+		{"redirect_uri": "http://127.0.0.1:64027/other"},
+		{"redirect_uri": "http://127.0.0.1/callback"},
+		{"redirect_uri": "http://127.0.0.1:64027/callback?x=1"},
+	} {
+		v := authorizeQuery("x")
+		for k, val := range bad {
+			v.Set(k, val)
 		}
-		v.Set(key, bad)
-		if _, _, _, ok := cliParams(v); ok {
-			t.Errorf("%s=%q accepted", key, bad)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/oauth/authorize?"+v.Encode(), nil))
+		if w.Code != http.StatusBadRequest || w.Header().Get("Location") != "" {
+			t.Errorf("%v: %d %s", bad, w.Code, w.Header().Get("Location"))
 		}
+	}
+	// Redirected with an error: no PKCE, or plain.
+	for _, bad := range []map[string]string{{"code_challenge_method": "plain"}, {"code_challenge": ""}, {"response_type": "token"}} {
+		v := authorizeQuery("x")
+		for k, val := range bad {
+			v.Set(k, val)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/oauth/authorize?"+v.Encode(), nil))
+		if loc, _ := url.Parse(w.Header().Get("Location")); loc == nil || loc.Query().Get("error") == "" {
+			t.Errorf("%v: %d %s", bad, w.Code, w.Header().Get("Location"))
+		}
+	}
+	// [::1] is loopback too.
+	if !loopback("http://[::1]:5000/callback") {
+		t.Error("[::1] refused")
 	}
 }
