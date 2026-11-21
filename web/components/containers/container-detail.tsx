@@ -19,7 +19,7 @@ import { post, remove } from "@/lib/api/http";
 import type { Container } from "@/lib/api/types";
 import { formatTime } from "@/lib/formatting/format";
 import { useAction } from "@/lib/hooks/use-action";
-import { sshCommand, terminalPath } from "@/lib/paths";
+import { sshCommand, sshConfig, terminalPath } from "@/lib/paths";
 
 import { ContainerStateBadge } from "./container-state";
 import { useContainers } from "./containers-context";
@@ -194,10 +194,14 @@ export const ContainerDetail = () => {
           {user.ssh ? (
             <Section title="SSH">
               <p className="text-xs text-foreground-tertiary">
-                Through the jump host, as a user of the image, with one of your keys (the image&apos;s sshd reads them from
-                /etc/containerservice/authorized_keys):
+                Through the jump host, with one of your keys. The user is <code>dev</code> in the images from images/; other
+                images have their own.
               </p>
-              <CopyLine text={sshCommand(user.ssh, "<user>", container.name)} />
+              <CopyLine text={sshCommand(user.ssh, "dev", container.name)} />
+              <p className="text-xs text-foreground-tertiary">
+                Or in <code>~/.ssh/config</code>, for <code>ssh {container.name}</code> and editors&apos; remote SSH:
+              </p>
+              <CopyLine text={sshConfig(user.ssh, "dev", container.name)} block />
             </Section>
           ) : null}
         </div>

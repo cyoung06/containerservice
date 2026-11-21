@@ -4,6 +4,11 @@ export const containerPath = (name: string): string => `/container/?name=${encod
 /** The full-window terminal a container's terminal pops out into. */
 export const terminalPath = (name: string): string => `/terminal/?name=${encodeURIComponent(name)}`;
 
+type Bastion = { readonly host: string; readonly port: number };
+
 /** The SSH command that reaches a container through the bastion. */
-export const sshCommand = (ssh: { readonly host: string; readonly port: number }, user: string, name: string): string =>
-  `ssh -J ${ssh.host}:${ssh.port} ${user}@${name}`;
+export const sshCommand = (ssh: Bastion, user: string, name: string): string => `ssh -J ${ssh.host}:${ssh.port} ${user}@${name}`;
+
+/** An ~/.ssh/config entry for a container, so that plain `ssh <name>` (and editors' remote SSH) work. */
+export const sshConfig = (ssh: Bastion, user: string, name: string): string =>
+  [`Host ${name}`, `  HostName ${name}`, `  User ${user}`, `  ProxyJump ${ssh.host}:${ssh.port}`].join("\n");

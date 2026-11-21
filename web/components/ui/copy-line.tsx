@@ -4,8 +4,8 @@ import { useState } from "react";
 
 import { Icon } from "./icon";
 
-/** A command in a monospace box with a button that copies it. */
-export const CopyLine = ({ text }: { readonly text: string }) => {
+/** A command (or, with block, lines) in a monospace box with a button that copies it. */
+export const CopyLine = ({ text, block = false }: { readonly text: string; readonly block?: boolean }) => {
   const [copied, setCopied] = useState(false);
   const copy = () => {
     void navigator.clipboard?.writeText(text).then(
@@ -18,8 +18,12 @@ export const CopyLine = ({ text }: { readonly text: string }) => {
     );
   };
   return (
-    <div className="flex min-w-0 items-center gap-2 rounded-md border border-border bg-background-secondary py-1 pr-1 pl-3">
-      <code className="min-w-0 flex-1 truncate font-mono text-xs text-foreground select-all">{text}</code>
+    <div className={`flex min-w-0 gap-2 rounded-md border border-border bg-background-secondary py-1 pr-1 pl-3 ${block ? "items-start" : "items-center"}`}>
+      {block ? (
+        <pre className="min-w-0 flex-1 overflow-x-auto py-1 font-mono text-xs text-foreground select-all">{text}</pre>
+      ) : (
+        <code className="min-w-0 flex-1 truncate font-mono text-xs text-foreground select-all">{text}</code>
+      )}
       <button
         type="button"
         onClick={copy}

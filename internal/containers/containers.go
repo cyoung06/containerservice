@@ -78,6 +78,9 @@ var (
 	imageRE  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
 )
 
+// ValidName reports whether name can be a container's name.
+func ValidName(name string) bool { return nameRE.MatchString(name) }
+
 // Check refuses specs that can't become a container.
 func (sp *Spec) Check() error {
 	if !nameRE.MatchString(sp.Name) {
