@@ -1,0 +1,60 @@
+# What containerservice's service account may do: everything it makes lives in one namespace
+# (here "containers"); the only cluster-wide right is reading storage classes for the volume form.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: containerservice, namespace: containers}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: containerservice, namespace: containers}
+rules:
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods/exec]          # the web terminal; websocket exec is authorized as get and create
+    verbs: [get, create]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [""]
+    resources: [secrets]            # authorized-keys only; create can't be limited by name
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [authorized-keys]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: containerservice, namespace: containers}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: containerservice}
+subjects: [{kind: ServiceAccount, name: containerservice, namespace: containers}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: containerservice-storageclasses}
+rules:
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: containerservice-storageclasses}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: containerservice-storageclasses}
+subjects: [{kind: ServiceAccount, name: containerservice, namespace: containers}]
+---
+# Every container's pod is <name>-0.containers.containers.svc through this one headless Service.
+# publishNotReadyAddresses: containers have no readiness probe to pass.
+apiVersion: v1
+kind: Service
+metadata: {name: containers, namespace: containers}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app.kubernetes.io/managed-by: containerservice}
+  ports: [{name: ssh, port: 22}]
