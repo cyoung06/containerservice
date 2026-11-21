@@ -246,9 +246,10 @@ func (a *API) remove(r *http.Request, _ auth.Session) (int, any, error) {
 // shell is what the terminal runs: the tmux session "console" (made or attached, so a terminal
 // left and reopened finds what ran in it, until the container stops), as the image's
 // CONTAINERSERVICE_USER if it names one, in a login shell; without tmux, a login bash (or sh).
-// It says it does truecolor (xterm.js does), through su (-w) and tmux (RGB).
+// It says it does truecolor (xterm.js does), through su (-w) and tmux (RGB), and passes copies to
+// the browser's clipboard (OSC 52: tmux set-clipboard, the terminal's clipboard addon).
 var shell = []string{"/bin/sh", "-c", `export TERM=xterm-256color COLORTERM=truecolor
-t='if command -v tmux >/dev/null 2>&1; then exec tmux start-server \; set -g default-terminal tmux-256color \; set -as terminal-features xterm-256color:RGB \; set -g status off \; set -g mouse on \; set -g history-limit 50000 \; new-session -A -s console; elif command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi'
+t='if command -v tmux >/dev/null 2>&1; then exec tmux start-server \; set -g default-terminal tmux-256color \; set -as terminal-features xterm-256color:RGB \; set -as terminal-features xterm-256color:clipboard \; set -g set-clipboard on \; set -g status off \; set -g mouse on \; set -g history-limit 50000 \; new-session -A -s console; elif command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi'
 u=${CONTAINERSERVICE_USER:-}
 if [ -n "$u" ] && [ "$(id -u)" = 0 ] && id "$u" >/dev/null 2>&1 && command -v su >/dev/null 2>&1; then exec su -l -w COLORTERM "$u" -c "$t"; fi
 exec sh -c "$t"`}

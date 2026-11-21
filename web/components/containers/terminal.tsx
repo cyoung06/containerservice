@@ -62,7 +62,7 @@ export const Terminal = ({
     }
     let disposed = false;
     let cleanup = () => {};
-    void Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]).then(([{ Terminal: XTerm }, { FitAddon }]) => {
+    void Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit"), import("@xterm/addon-clipboard")]).then(([{ Terminal: XTerm }, { FitAddon }, { ClipboardAddon }]) => {
       if (disposed) {
         return;
       }
@@ -76,6 +76,8 @@ export const Terminal = ({
       });
       const fit = new FitAddon();
       terminal.loadAddon(fit);
+      // OSC 52: programs (tmux's mouse selection, editors) put text on the browser's clipboard.
+      terminal.loadAddon(new ClipboardAddon());
       terminal.open(element);
       fit.fit();
       terminal.focus();
