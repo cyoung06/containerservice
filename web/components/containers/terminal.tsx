@@ -68,6 +68,10 @@ export const Terminal = ({
       }
       const terminal = new XTerm({
         cursorBlink: true,
+        // tmux has the mouse (scrolling, its own copy, which reaches the clipboard over OSC 52 in
+        // browsers that allow it: not Safari). Option-drag selects in the page instead, for ⌘C
+        // anywhere (Shift-drag does on other systems).
+        macOptionClickForcesSelection: true,
         fontFamily: '"Geist Mono Variable", ui-monospace, monospace',
         fontSize: 13,
         // Truecolor programs (Claude Code's orange, editors' themes) draw their own colors; this is

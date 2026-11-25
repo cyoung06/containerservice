@@ -37,6 +37,9 @@ export const ConsoleFrame = ({
       />
       <span className="text-foreground-secondary">{labels[status]}</span>
       <span className="flex-1" />
+      <span className="hidden text-foreground-quaternary md:inline" title="Dragging selects in tmux, which copies to the clipboard where the browser allows it (not Safari). Holding ⌥ (Shift elsewhere) selects in the page instead, for ⌘C.">
+        ⌥-drag, then ⌘C, to copy
+      </span>
       {actions}
       {status === "closed" ? (
         <Button size="small" onClick={onReconnect} leadingIcon={<Icon name="refresh" size={12} />}>

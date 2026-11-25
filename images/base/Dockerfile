@@ -7,6 +7,7 @@ FROM docker.io/library/ubuntu:24.04
 # Ubuntu node, container processes are stacked with "unconfined", whose half follows the host's
 # profiles by path, and the host's fusermount3 profile (for /usr/bin/fusermount3) breaks it in a
 # container. Elsewhere only containerservice's profile applies. libfuse and rclone find it on PATH.
+# fusermount (the FUSE 2 name, a relative link to fusermount3) moves with it, so it still resolves.
 ARG RCLONE=1.76.0
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 CONTAINERSERVICE_USER=dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,7 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && curl -fsSLo /tmp/rclone.deb https://github.com/rclone/rclone/releases/download/v${RCLONE}/rclone-v${RCLONE}-linux-amd64.deb \
  && dpkg -i /tmp/rclone.deb && rm /tmp/rclone.deb \
  && ln -sf /proc/self/mounts /etc/mtab \
- && dpkg-divert --local --rename --divert /usr/local/bin/fusermount3 --add /usr/bin/fusermount3
+ && dpkg-divert --local --rename --divert /usr/local/bin/fusermount3 --add /usr/bin/fusermount3 \
+ && dpkg-divert --local --rename --divert /usr/local/bin/fusermount --add /usr/bin/fusermount \
+ && test -x /usr/local/bin/fusermount && ! test -e /usr/bin/fusermount
 COPY sshd.conf /etc/ssh/sshd_config.d/containerservice.conf
 COPY entrypoint /usr/local/bin/containerservice-entrypoint
 # A token of the container's own service account for any audience (drive, forge, ...); with "FUSE
