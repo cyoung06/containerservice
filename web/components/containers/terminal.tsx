@@ -7,6 +7,8 @@ import "@xterm/xterm/css/xterm.css";
 import { containerUrl } from "@/lib/api/containers";
 import { socketUrl } from "@/lib/api/http";
 
+import { DialogFrame } from "@/components/ui/dialog-frame";
+
 import { ConsoleFrame, type ConsoleStatus } from "./console-frame";
 
 /**
@@ -18,17 +20,37 @@ const stdin = 0;
 const resizeChannel = 4;
 
 /** A dark terminal whatever the page's theme, with muted, readable ANSI colors. */
-/** Opens a link from the terminal in a new tab: http(s) only (no javascript: and the like). */
-const openLink = (uri: string) => {
+/** A link from the terminal as a URL to offer, or null: http(s) only (no javascript: and the like). */
+const linkURL = (uri: string): URL | null => {
   try {
     const url = new URL(uri);
-    if (url.protocol === "http:" || url.protocol === "https:") {
-      window.open(url.href, "_blank", "noopener,noreferrer");
-    }
+    return url.protocol === "http:" || url.protocol === "https:" ? url : null;
   } catch {
-    // not a URL
+    return null;
   }
 };
+
+/** Asks before a link from the terminal opens: what's inside the container decides what links say. */
+const OpenLinkDialog = ({ url, onClose }: { readonly url: URL; readonly onClose: () => void }) => (
+  <DialogFrame
+    title="Open this link?"
+    submitLabel="Open in a new tab"
+    pending={false}
+    error={null}
+    onClose={onClose}
+    onSubmit={() => {
+      window.open(url.href, "_blank", "noopener,noreferrer");
+      onClose();
+    }}
+  >
+    <p className="text-[13px] text-foreground-secondary">
+      A program in the container printed it. It goes to <span className="font-medium text-foreground">{url.host}</span>:
+    </p>
+    <code className="block rounded-md border border-border bg-background-secondary px-2.5 py-2 font-mono text-xs text-foreground [overflow-wrap:anywhere] select-all">
+      {url.href}
+    </code>
+  </DialogFrame>
+);
 
 /**
  * The clipboard, fed by OSC 52 ("c;<base64>"). Browsers that let a page write the clipboard only
@@ -125,6 +147,8 @@ export const Terminal = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<ConsoleStatus>("connecting");
   const [attempt, setAttempt] = useState(0);
+  // A link clicked in the terminal, waiting for the user to say yes.
+  const [link, setLink] = useState<URL | null>(null);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -148,13 +172,13 @@ export const Terminal = ({
         // Truecolor programs (Claude Code's orange, editors' themes) draw their own colors; this is
         // the dark palette for everything that uses the 16 ANSI colors.
         theme: terminalTheme,
-        // OSC 8 hyperlinks (Claude Code marks its links so): opened in a new tab, http(s) only.
-        linkHandler: { activate: (_event, uri) => openLink(uri) },
+        // OSC 8 hyperlinks (Claude Code marks its links so): offered, after a yes, in a new tab.
+        linkHandler: { activate: (_event, uri) => setLink(linkURL(uri)) },
       });
       const fit = new FitAddon();
       terminal.loadAddon(fit);
       // Plain URLs in the output, clickable too.
-      terminal.loadAddon(new WebLinksAddon((_event, uri) => openLink(uri)));
+      terminal.loadAddon(new WebLinksAddon((_event, uri) => setLink(linkURL(uri))));
       terminal.open(element);
       const clipboard = new Clipboard();
       // OSC 52: tmux (its mouse selection) and editors put text on the clipboard this way.
@@ -272,6 +296,7 @@ export const Terminal = ({
       }}
     >
       <div key={attempt} ref={containerRef} className="h-full w-full p-2" />
+      {link ? <OpenLinkDialog url={link} onClose={() => setLink(null)} /> : null}
     </ConsoleFrame>
   );
 };
