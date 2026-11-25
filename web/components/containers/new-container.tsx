@@ -126,11 +126,10 @@ export const NewContainer = ({ existing }: { readonly existing?: Container } = {
   const [debug, setDebug] = useState(existing?.debug ?? false);
   const [claudeLogin, setClaudeLogin] = useState(existing?.claudeLogin ?? false);
   const [fuseMounts, setFuseMounts] = useState(existing?.fuseMounts ?? false);
-  // Identity: a new one (by default, named after the container), one of yours, or none.
+  // Identity: a new one (by default, named after the container) or one of yours. Every container
+  // wears one; one made before identities gets a new one when edited, unless you pick one of yours.
   const identities = useResource(loadIdentities);
-  const [identityMode, setIdentityMode] = useState<"new" | "existing" | "none">(
-    existing ? (existing.identity ? "existing" : "none") : "new",
-  );
+  const [identityMode, setIdentityMode] = useState<"new" | "existing">(existing?.identity ? "existing" : "new");
   const [newIdentityName, setNewIdentityName] = useState<string | null>(null);
   const [existingIdentity, setExistingIdentity] = useState(existing?.identity ?? "");
   const newIdentity = newIdentityName ?? name;
@@ -241,7 +240,7 @@ export const NewContainer = ({ existing }: { readonly existing?: Container } = {
       debug,
       claudeLogin,
       fuseMounts,
-      identity: identityMode === "none" ? "" : identityMode === "new" ? newIdentity : existingIdentity,
+      identity: identityMode === "new" ? newIdentity : existingIdentity,
       newIdentity: identityMode === "new",
     };
     void action.run(async () => {
@@ -420,7 +419,7 @@ export const NewContainer = ({ existing }: { readonly existing?: Container } = {
               <p className="text-xs text-foreground-tertiary">
                 Who the container is to other services: its tokens (sa-token AUDIENCE) carry the identity&apos;s
                 subject, which you grant folders and the like to. Several containers may wear one identity and
-                share what&apos;s granted to it. Without one, the container has no Kubernetes token at all.
+                share what&apos;s granted to it.
               </p>
             </div>
             <div className="flex flex-wrap gap-4 text-xs text-foreground-secondary">
@@ -428,7 +427,6 @@ export const NewContainer = ({ existing }: { readonly existing?: Container } = {
                 [
                   ["new", "A new identity"],
                   ["existing", "One of mine"],
-                  ["none", "None"],
                 ] as const
               ).map(([mode, label]) => (
                 <label key={mode} className="flex items-center gap-1.5">

@@ -10,7 +10,7 @@ metadata: {name: containerservice, namespace: containers}
 rules:
   - apiGroups: [apps]
     resources: [statefulsets]
-    verbs: [get, list, watch, create, patch, delete]
+    verbs: [get, list, watch, create, update, patch, delete]   # update: editing replaces the pod template
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list, watch]

@@ -201,7 +201,7 @@ export const ContainerDetail = () => {
                       <span className="font-mono text-xs text-foreground-tertiary [overflow-wrap:anywhere]">{container.subject}</span>
                     </span>
                   ) : (
-                    "None (no Kubernetes token)"
+                    "None yet: edit it to give it one"
                   ),
                 ],
                 ["Restarts", container.restarts > 0 ? String(container.restarts) : null],

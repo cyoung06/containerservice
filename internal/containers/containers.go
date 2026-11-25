@@ -46,9 +46,9 @@ type Spec struct {
 	// in its own user namespace, and the node's containerservice-fuse seccomp and AppArmor profiles,
 	// which allow FUSE mounts and nothing more of what SYS_ADMIN would.
 	FuseMounts bool `json:"fuseMounts"`
-	// Identity is the identity the container wears ("": none, and no Kubernetes token in it).
-	// NewIdentity, on a create or an edit: make it first (a name that exists is refused). Never
-	// read back.
+	// Identity is the identity the container wears; every container has one ("" only on
+	// containers made before identities, until they're edited). NewIdentity, on a create or an
+	// edit: make it first (a name that exists is refused). Never read back.
 	Identity    string `json:"identity"`
 	NewIdentity bool   `json:"newIdentity,omitempty"`
 }
@@ -131,7 +131,10 @@ func (sp *Spec) Check() error {
 	if sp.DiskGiB < 1 || sp.DiskGiB > MaxDiskGiB {
 		return refuse(http.StatusBadRequest, "The disk limit is 1–%d GiB.", MaxDiskGiB)
 	}
-	if sp.Identity != "" && !nameRE.MatchString(sp.Identity) {
+	if sp.Identity == "" {
+		return refuse(http.StatusBadRequest, "A container wears an identity: a new one (newIdentity) or one of yours.")
+	}
+	if !nameRE.MatchString(sp.Identity) {
 		return refuse(http.StatusBadRequest, "An identity's name is 1–52 lowercase letters, digits and dashes, starting with a letter.")
 	}
 	// Debugging lifts the seccomp filter, and with it the block on the new mount API (fsopen,
@@ -139,9 +142,6 @@ func (sp *Spec) Check() error {
 	// namespace the terminal joins. One or the other.
 	if sp.Debug && sp.FuseMounts {
 		return refuse(http.StatusBadRequest, "Debugging and FUSE mounts can't be on together: without the seccomp filter, FUSE's SYS_ADMIN would allow any mount.")
-	}
-	if sp.NewIdentity && sp.Identity == "" {
-		return refuse(http.StatusBadRequest, "A new identity needs a name.")
 	}
 	if len(sp.Mounts) > maxMounts {
 		return refuse(http.StatusBadRequest, "At most %d mounts.", maxMounts)

@@ -92,7 +92,7 @@ const usage = `cs: containerservice from a terminal
                                 n new, e edit, s start/stop, d delete, / filter, q quit
   cs new <name>               make a container from a preset (~/.config/cs/presets.toml) and connect
                                 --preset NAME  --image REF  --debug  --disk GiB  --home GiB (0: none)
-                                --class NAME   --no-claude   --identity new|none|NAME
+                                --class NAME   --no-claude   --identity new|NAME
   cs ssh <name>               connect, in the tmux session "console" (the web console's)
                                 -s NAME  another tmux session    --plain  a shell without tmux
   cs fwd <name> 3000[:8080]   forward localhost:3000 to the container's port 8080 (default the same)

@@ -19,7 +19,7 @@ type editable struct {
 	Debug       bool        `toml:"debug"`
 	FuseMounts  bool        `toml:"fuse_mounts"`
 	ClaudeLogin bool        `toml:"claude_login"`
-	Identity    string      `toml:"identity"` // one of yours ("": none); new_identity makes it
+	Identity    string      `toml:"identity"` // one of yours; with new_identity, a new one by this name
 	NewIdentity bool        `toml:"new_identity,omitempty"`
 	Mounts      []editMount `toml:"mounts"`
 }
@@ -37,8 +37,8 @@ type editMount struct {
 const editHeader = `# Settings of %s. Save and quit to apply; saving restarts it if it runs (volumes keep their
 # files, what runs in it ends). Empty the file to cancel.
 # mounts: an existing volume {path, volume, read_only}, a new one {path, volume, new_gib, class},
-# or a temporary folder {path, temp = true, size_mib}. identity: one of yours, "" for none, or a new
-# one's name with new_identity = true. debug and fuse_mounts can't both be on.
+# or a temporary folder {path, temp = true, size_mib}. identity: one of yours, or a new one's name
+# with new_identity = true. debug and fuse_mounts can't both be on.
 
 `
 
@@ -47,6 +47,9 @@ func edit(name string) {
 	c := get(name)
 	e := editable{Image: c.Image, CPU: float64(c.CPUMillis) / 1000, Memory: c.MemoryMiB, Disk: c.DiskGiB,
 		Debug: c.Debug, FuseMounts: c.FuseMounts, ClaudeLogin: c.ClaudeLogin, Identity: c.Identity}
+	if e.Identity == "" { // made before identities: it gets one of its own
+		e.Identity, e.NewIdentity = name, true
+	}
 	for _, m := range c.Mounts {
 		e.Mounts = append(e.Mounts, editMount{Path: m.Path, Volume: m.Volume, Temp: m.Temp, SizeMiB: m.SizeMiB, ReadOnly: m.ReadOnly})
 	}

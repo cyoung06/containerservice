@@ -35,8 +35,8 @@ default seccomp profile, no NET_RAW/MKNOD, and the pod label-free of
 in its own user namespace, and the node's `containerservice-fuse` seccomp and AppArmor profiles,
 which allow FUSE mounts and nothing more).
 
-A container wears an identity (`identity`, the name of one; `""`: none, and no Kubernetes token in
-it). An identity is a service account of the namespace, `identity-<name>-<8 random characters>`,
+Every container wears an identity (`identity`, the name of one; a container without one is refused,
+400). An identity is a service account of the namespace, `identity-<name>-<8 random characters>`,
 never used again, whose mounted token may do one thing: create tokens for that account
 (TokenRequest), for any audience (the images' `sa-token AUDIENCE`). Its subject for the cluster's
 issuer, `system:serviceaccount:<namespace>:<account>` (`Container.subject`), is the identity other

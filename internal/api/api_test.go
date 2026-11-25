@@ -214,7 +214,7 @@ func TestKeysReachTheSecret(t *testing.T) {
 
 func TestCreateContainer(t *testing.T) {
 	h, _ := setup(t, true)
-	w := do(h, "POST", "/api/containers", `{"name":"pwn","image":"ubuntu:24.04","mounts":[{"path":"/scratch","temp":true}]}`, true)
+	w := do(h, "POST", "/api/containers", `{"name":"pwn","image":"ubuntu:24.04","mounts":[{"path":"/scratch","temp":true}],"identity":"pwn","newIdentity":true}`, true)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", w.Code, w.Body)
 	}
@@ -257,10 +257,10 @@ func TestClaude(t *testing.T) {
 
 func TestUpdateContainer(t *testing.T) {
 	h, client := setup(t, true)
-	if w := do(h, "POST", "/api/containers", `{"name":"box","image":"ubuntu","mounts":[]}`, true); w.Code != http.StatusCreated {
+	if w := do(h, "POST", "/api/containers", `{"name":"box","image":"ubuntu","mounts":[],"identity":"box","newIdentity":true}`, true); w.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", w.Code, w.Body)
 	}
-	w := do(h, "PATCH", "/api/containers/box", `{"name":"box","image":"debian","mounts":[],"fuseMounts":true}`, true)
+	w := do(h, "PATCH", "/api/containers/box", `{"name":"box","image":"debian","mounts":[],"fuseMounts":true,"identity":"box"}`, true)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"fuseMounts":true`) {
 		t.Fatalf("patch: %d %s", w.Code, w.Body)
 	}
@@ -268,7 +268,7 @@ func TestUpdateContainer(t *testing.T) {
 	if set.Spec.Template.Spec.Containers[0].Image != "debian" {
 		t.Errorf("image %q", set.Spec.Template.Spec.Containers[0].Image)
 	}
-	if w := do(h, "PATCH", "/api/containers/box", `{"name":"box","image":"debian","mounts":[]}`, false); w.Code != http.StatusForbidden {
+	if w := do(h, "PATCH", "/api/containers/box", `{"name":"box","image":"debian","mounts":[],"identity":"box"}`, false); w.Code != http.StatusForbidden {
 		t.Errorf("without X-Requested-With: %d", w.Code)
 	}
 }

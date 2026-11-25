@@ -137,7 +137,7 @@ func status(err error) int {
 }
 
 func TestCheck(t *testing.T) {
-	ok := Spec{Name: "pwn", Image: "oci.syeyoung.dev/me/pwn:1", Mounts: []Mount{{Path: "/work", Volume: "work"}, {Path: "/tmp/x", Temp: true, SizeMiB: 512}}}
+	ok := Spec{Name: "pwn", Identity: "pwn", NewIdentity: true, Image: "oci.syeyoung.dev/me/pwn:1", Mounts: []Mount{{Path: "/work", Volume: "work"}, {Path: "/tmp/x", Temp: true, SizeMiB: 512}}}
 	if err := ok.Check(); err != nil {
 		t.Fatalf("valid spec refused: %v", err)
 	}
@@ -145,7 +145,8 @@ func TestCheck(t *testing.T) {
 		"uppercase name":   {Name: "Pwn", Image: "ubuntu"},
 		"long name":        {Name: "a23456789012345678901234567890123456789012345678901234", Image: "ubuntu"},
 		"trailing dash":    {Name: "pwn-", Image: "ubuntu"},
-		"no image":         {Name: "pwn"},
+		"no image":         {Name: "pwn", Identity: "pwn"},
+		"no identity":      {Name: "pwn", Image: "ubuntu"},
 		"image with space": {Name: "pwn", Image: "ubuntu 24.04"},
 		"relative path":    {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "work", Volume: "w"}}},
 		"root path":        {Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/", Volume: "w"}}},
@@ -249,7 +250,7 @@ func TestCreateMakesTheStatefulSet(t *testing.T) {
 
 func TestHardenedByDefault(t *testing.T) {
 	s, client, _ := newService(t)
-	if _, err := s.Create(context.Background(), Spec{Name: "agent", Image: "ubuntu"}); err != nil {
+	if _, err := s.Create(context.Background(), Spec{Name: "agent", Identity: "agent", NewIdentity: true, Image: "ubuntu"}); err != nil {
 		t.Fatal(err)
 	}
 	set, err := client.AppsV1().StatefulSets("cs").Get(context.Background(), "agent", metav1.GetOptions{})
@@ -307,12 +308,12 @@ func TestSyncClaude(t *testing.T) {
 func TestFuseMounts(t *testing.T) {
 	s, client, _ := newService(t)
 	ctx := context.Background()
-	if _, err := s.Create(ctx, Spec{Name: "both", Image: "ubuntu", FuseMounts: true, Debug: true}); status(err) != http.StatusBadRequest {
+	if _, err := s.Create(ctx, Spec{Name: "both", Identity: "both", NewIdentity: true, Image: "ubuntu", FuseMounts: true, Debug: true}); status(err) != http.StatusBadRequest {
 		t.Errorf("debug + fuse: %v", err)
 	}
 	for _, debug := range []bool{false} {
 		name := "fuse"
-		if _, err := s.Create(ctx, Spec{Name: name, Image: "ubuntu", FuseMounts: true, Debug: debug}); err != nil {
+		if _, err := s.Create(ctx, Spec{Name: name, Image: "ubuntu", FuseMounts: true, Debug: debug, Identity: name, NewIdentity: true}); err != nil {
 			t.Fatal(err)
 		}
 		set, _ := client.AppsV1().StatefulSets("cs").Get(ctx, name, metav1.GetOptions{})
@@ -343,7 +344,7 @@ func TestFuseMounts(t *testing.T) {
 func TestUpdate(t *testing.T) {
 	s, client, _ := newService(t)
 	ctx := context.Background()
-	created, err := s.Create(ctx, Spec{Name: "box", Image: "ubuntu"})
+	created, err := s.Create(ctx, Spec{Name: "box", Identity: "box", NewIdentity: true, Image: "ubuntu"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,13 +354,13 @@ func TestUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, s, func() bool { c, _ := s.Get("box"); return !c.Running })
-	if _, err := s.Update(ctx, "box", Spec{Name: "other", Image: "ubuntu"}); status(err) != http.StatusBadRequest {
+	if _, err := s.Update(ctx, "box", Spec{Name: "other", Identity: "other", NewIdentity: true, Image: "ubuntu"}); status(err) != http.StatusBadRequest {
 		t.Errorf("rename: %v", err)
 	}
-	if _, err := s.Update(ctx, "nope", Spec{Name: "nope", Image: "ubuntu"}); status(err) != http.StatusNotFound {
+	if _, err := s.Update(ctx, "nope", Spec{Name: "nope", Identity: "nope", NewIdentity: true, Image: "ubuntu"}); status(err) != http.StatusNotFound {
 		t.Errorf("missing: %v", err)
 	}
-	next := Spec{Name: "box", Image: "debian", Debug: true, ClaudeLogin: true, DiskGiB: 30, Identity: "box", NewIdentity: true,
+	next := Spec{Name: "box", Image: "debian", Debug: true, ClaudeLogin: true, DiskGiB: 30, Identity: "box",
 		Mounts: []Mount{{Path: "/home/dev", Volume: "box-home", New: &NewVolume{SizeGiB: 5}}}}
 	c, err := s.Update(ctx, "box", next)
 	if err != nil {
@@ -369,12 +370,11 @@ func TestUpdate(t *testing.T) {
 		t.Error("a stopped container started on edit")
 	}
 	set, _ := client.AppsV1().StatefulSets("cs").Get(ctx, "box", metav1.GetOptions{})
-	if before != "" || set.Spec.Template.Spec.ServiceAccountName == "" || !*set.Spec.Template.Spec.AutomountServiceAccountToken {
-		t.Errorf("identity: none before (%q), a new one after: %q", before, set.Spec.Template.Spec.ServiceAccountName)
+	if before == "" || set.Spec.Template.Spec.ServiceAccountName == "" || !*set.Spec.Template.Spec.AutomountServiceAccountToken {
+		t.Errorf("identity: %q before, %q after", before, set.Spec.Template.Spec.ServiceAccountName)
 	}
 	got := specOf(set)
 	next.Mounts[0].New = nil
-	next.NewIdentity = false
 	if !reflect.DeepEqual(got, next) {
 		t.Errorf("after edit:\n got %+v\nwant %+v", got, next)
 	}
@@ -386,13 +386,9 @@ func TestUpdate(t *testing.T) {
 func TestIdentities(t *testing.T) {
 	s, client, _ := newService(t)
 	ctx := context.Background()
-	// No identity: no token.
-	if _, err := s.Create(ctx, Spec{Name: "plain", Image: "ubuntu"}); err != nil {
-		t.Fatal(err)
-	}
-	set, _ := client.AppsV1().StatefulSets("cs").Get(ctx, "plain", metav1.GetOptions{})
-	if *set.Spec.Template.Spec.AutomountServiceAccountToken || set.Spec.Template.Spec.ServiceAccountName != "" {
-		t.Errorf("a container without an identity has a token: %q", set.Spec.Template.Spec.ServiceAccountName)
+	// Every container wears one.
+	if _, err := s.Create(ctx, Spec{Name: "plain", Image: "ubuntu"}); status(err) != http.StatusBadRequest {
+		t.Errorf("a container without an identity: %v", err)
 	}
 	// A new identity, then a second container wearing it, then refusals.
 	a, err := s.Create(ctx, Spec{Name: "a", Image: "ubuntu", Identity: "shared", NewIdentity: true})
@@ -474,7 +470,7 @@ func TestCreateMakesNewVolumes(t *testing.T) {
 	}
 	for what, m := range refused {
 		// The good new volume comes first: nothing at all may be made when a later mount is refused.
-		sp := Spec{Name: "dev", Image: "ubuntu", Mounts: []Mount{{Path: "/a", Volume: "first", New: &NewVolume{StorageClass: "zfs", SizeGiB: 1}}, m}}
+		sp := Spec{Name: "dev", Identity: "dev", NewIdentity: true, Image: "ubuntu", Mounts: []Mount{{Path: "/a", Volume: "first", New: &NewVolume{StorageClass: "zfs", SizeGiB: 1}}, m}}
 		if _, err := s.Create(ctx, sp); status(err) < 400 || status(err) > 409 {
 			t.Errorf("%s: got %v, want a refusal", what, err)
 		}
@@ -482,7 +478,7 @@ func TestCreateMakesNewVolumes(t *testing.T) {
 	if pvcs, _ := client.CoreV1().PersistentVolumeClaims("cs").List(ctx, metav1.ListOptions{}); len(pvcs.Items) != 1 {
 		t.Fatalf("refused creates made volumes: %d", len(pvcs.Items))
 	}
-	sp := Spec{Name: "dev", Image: "ubuntu", Mounts: []Mount{{Path: "/home/dev", Volume: "home", New: &NewVolume{StorageClass: "zfs", SizeGiB: 20}}}}
+	sp := Spec{Name: "dev", Identity: "dev", NewIdentity: true, Image: "ubuntu", Mounts: []Mount{{Path: "/home/dev", Volume: "home", New: &NewVolume{StorageClass: "zfs", SizeGiB: 20}}}}
 	c, err := s.Create(ctx, sp)
 	if err != nil {
 		t.Fatal(err)
@@ -501,7 +497,7 @@ func TestCreateMakesNewVolumes(t *testing.T) {
 
 func TestCreateRefusesMissingVolume(t *testing.T) {
 	s, _, _ := newService(t)
-	_, err := s.Create(context.Background(), Spec{Name: "pwn", Image: "ubuntu", Mounts: []Mount{{Path: "/work", Volume: "nope"}}})
+	_, err := s.Create(context.Background(), Spec{Name: "pwn", Identity: "pwn", NewIdentity: true, Image: "ubuntu", Mounts: []Mount{{Path: "/work", Volume: "nope"}}})
 	if status(err) != http.StatusBadRequest {
 		t.Fatalf("got %v, want a 400", err)
 	}
@@ -510,7 +506,7 @@ func TestCreateRefusesMissingVolume(t *testing.T) {
 func TestStopStartDelete(t *testing.T) {
 	s, client, _ := newService(t)
 	ctx := context.Background()
-	if _, err := s.Create(ctx, Spec{Name: "box", Image: "ubuntu"}); err != nil {
+	if _, err := s.Create(ctx, Spec{Name: "box", Identity: "box", NewIdentity: true, Image: "ubuntu"}); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, s, func() bool { _, err := s.Get("box"); return err == nil })
@@ -539,7 +535,7 @@ func TestStopStartDelete(t *testing.T) {
 func TestPodState(t *testing.T) {
 	s, client, _ := newService(t)
 	ctx := context.Background()
-	if _, err := s.Create(ctx, Spec{Name: "box", Image: "nope:1"}); err != nil {
+	if _, err := s.Create(ctx, Spec{Name: "box", Identity: "box", NewIdentity: true, Image: "nope:1"}); err != nil {
 		t.Fatal(err)
 	}
 	pod := &corev1.Pod{
@@ -600,7 +596,7 @@ func TestVolumes(t *testing.T) {
 	if q := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; q.String() != "20Gi" {
 		t.Errorf("after resize: %s", q.String())
 	}
-	if _, err := s.Create(ctx, Spec{Name: "box", Image: "ubuntu", Mounts: []Mount{{Path: "/work", Volume: "work"}}}); err != nil {
+	if _, err := s.Create(ctx, Spec{Name: "box", Identity: "box", NewIdentity: true, Image: "ubuntu", Mounts: []Mount{{Path: "/work", Volume: "work"}}}); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, s, func() bool {

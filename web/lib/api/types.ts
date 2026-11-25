@@ -35,7 +35,7 @@ export type Spec = {
   readonly claudeLogin: boolean;
   /** FUSE mounts (sshfs, rclone): /dev/fuse, namespaced SYS_ADMIN, the FUSE profiles. */
   readonly fuseMounts: boolean;
-  /** The identity it wears ("": none, and no Kubernetes token in it). */
+  /** The identity it wears ("" only on containers made before identities, until edited). */
   readonly identity: string;
   /** On a create or edit: make that identity first. */
   readonly newIdentity?: boolean;
