@@ -1,0 +1,22 @@
+# sws (github.com/cyoung06/sws): this container's way into the services that take workload
+# identity, with no stored secret. Its identity is the container's (containerservice's identities):
+# sws asks the API server for a token bound to the pod, for each service's audience.
+#   sws whoami                         the subject a person grants to
+#   sws drive request "label"          ask for a drive folder (prints a link to approve)
+#   sws drive setup                    once: then ssh/sftp/rsync/sshfs reach drive-<owner>
+#   sws git setup / sws pulp token     Forgejo through git-sts, Pulp
+[identity]
+source = "kubernetes"
+
+[drive]
+url = "https://files.drive.syeyoung.dev"
+audience = "https://files.drive.syeyoung.dev"
+
+[git]
+sts = "https://sts.git.syeyoung.dev/sts"
+audience = "https://sts.git.syeyoung.dev"
+host = "git.syeyoung.dev"
+
+[pulp]
+url = "https://pulp.syeyoung.dev"
+audience = "https://pulp.syeyoung.dev"

@@ -38,6 +38,10 @@ made, shared between containers and deleted on their own page. "FUSE mounts" nee
 `containerservice-fuse` seccomp and AppArmor profiles (`host/` in the cluster repo) and the FUSE
 device plugin (`cmd/fuse-device-plugin`), and can't be on with Debugging.
 
+The images carry [sws](https://github.com/cyoung06/sws), configured (`/etc/sws/config.toml`) for
+the drive, Forgejo through git-sts and Pulp: `sws whoami`, `sws drive request "…"`, `sws drive setup`
+(then `ssh drive-<owner>`, `sftp`, `rsync`, `sshfs`), `sws git setup`, `sws pulp token`.
+
 `images/` has images that do all this (Ubuntu 24.04, user `dev` with passwordless sudo, home at
 `/home/dev`): `base`, `pwn` (gdb/pwndbg, pwntools, ROPgadget, one_gadget, radare2, qemu-user) and
 `claude` (Claude Code, Node, gh, Go, uv). `images/build.sh` builds and pushes them to

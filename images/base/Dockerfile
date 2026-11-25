@@ -9,6 +9,9 @@ FROM docker.io/library/ubuntu:24.04
 # container. Elsewhere only containerservice's profile applies. libfuse and rclone find it on PATH.
 # fusermount (the FUSE 2 name, a relative link to fusermount3) moves with it, so it still resolves.
 ARG RCLONE=1.76.0
+# sws: the container's way into the drive, Forgejo (git-sts) and Pulp with its identity (sws.toml).
+ARG SWS=0.1.0
+ARG SWS_SHA256=98f4126daf0bbe50f4ad5ed362f79841fbe7e39e9eae1a452271c9ec4ee799be
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 CONTAINERSERVICE_USER=dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
       openssh-server openssh-client sudo tini ca-certificates curl wget gnupg \
@@ -25,6 +28,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -f /etc/ssh/ssh_host_* \
  && curl -fsSLo /tmp/rclone.deb https://github.com/rclone/rclone/releases/download/v${RCLONE}/rclone-v${RCLONE}-linux-amd64.deb \
  && dpkg -i /tmp/rclone.deb && rm /tmp/rclone.deb \
+ && curl -fsSLo /tmp/sws.tar.gz https://github.com/cyoung06/sws/releases/download/v${SWS}/sws_${SWS}_linux_amd64.tar.gz \
+ && echo "${SWS_SHA256}  /tmp/sws.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/sws.tar.gz -C /tmp && install -m 755 /tmp/sws_${SWS}_linux_amd64/sws /usr/local/bin/sws \
+ && rm -rf /tmp/sws.tar.gz /tmp/sws_${SWS}_linux_amd64 \
  && ln -sf /proc/self/mounts /etc/mtab \
  && dpkg-divert --local --rename --divert /usr/local/bin/fusermount3 --add /usr/bin/fusermount3 \
  && dpkg-divert --local --rename --divert /usr/local/bin/fusermount --add /usr/bin/fusermount \
@@ -34,5 +41,6 @@ COPY entrypoint /usr/local/bin/containerservice-entrypoint
 # A token of the container's own service account for any audience (drive, forge, ...); with "FUSE
 # mounts" on, sshfs and rclone mount (fuse3).
 COPY sa-token /usr/local/bin/sa-token
+COPY sws.toml /etc/sws/config.toml
 EXPOSE 22
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/containerservice-entrypoint"]
