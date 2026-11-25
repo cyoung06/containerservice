@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -65,6 +66,7 @@ func main() {
 	flag.StringVar(&ui.LoginProvider, "login-provider", "", "the sign-in provider's name for the button, e.g. \"Keycloak\" (empty: \"Sign in\")")
 	sshPublic := flag.String("ssh-public", "", "the bastion's address as the owner reaches it, host:port, shown in the UI (empty: none)")
 	images := flag.String("images", "", "comma-separated image references the new-container form suggests")
+	iconsDir := flag.String("icons", "", "a directory with the site's icons: favicon.svg, favicon.ico, apple-touch-icon.png (any may be missing)")
 	flag.Parse()
 
 	for name, v := range map[string]string{"namespace": cc.Namespace, "database-url-file": *databaseURLFile, "origin": a.Origin, "oidc-issuer": a.Issuer,
@@ -136,6 +138,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	if *iconsDir != "" {
+		ui.Icons = map[string][]byte{}
+		for name := range web.IconFiles {
+			if data, err := os.ReadFile(filepath.Join(*iconsDir, name)); err == nil {
+				ui.Icons[name] = data
+			}
+		}
+	}
 	routes := api.New(signIn, svc, db, term, a.Origin, sshAddr, log)
 	for _, ref := range strings.Split(*images, ",") {
 		if ref = strings.TrimSpace(ref); ref != "" {

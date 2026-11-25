@@ -37,7 +37,7 @@ type Config struct {
 // IconFiles are the icon file names served at the root.
 var IconFiles = map[string]string{"favicon.svg": "image/svg+xml", "favicon.ico": "image/x-icon", "apple-touch-icon.png": "image/png"}
 
-// defaultFavicon is a plain box glyph.
+// defaultFavicon is a plain box glyph, for a deployment that gives no icons (-icons).
 const defaultFavicon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M16 3 28 9.5v13L16 29 4 22.5v-13z" fill="#1f2937"/><path d="M16 15.5 28 9.5M16 15.5 4 9.5M16 15.5V29" stroke="#60a5fa" stroke-width="2" fill="none"/></svg>`
 
 // basePolicy is the Content-Security-Policy of every response: everything from this origin. The
