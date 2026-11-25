@@ -33,6 +33,21 @@ export type Spec = {
   readonly debug: boolean;
   /** Mounts the shared Claude Code token (CLAUDE_CODE_OAUTH_TOKEN in the claude image). */
   readonly claudeLogin: boolean;
+  /** FUSE mounts (sshfs, rclone): /dev/fuse, namespaced SYS_ADMIN, the FUSE profiles. */
+  readonly fuseMounts: boolean;
+  /** The identity it wears ("": none, and no Kubernetes token in it). */
+  readonly identity: string;
+  /** On a create or edit: make that identity first. */
+  readonly newIdentity?: boolean;
+};
+
+/** An identity: a service account containers wear; its subject is what other services grant to. */
+export type Identity = {
+  readonly name: string;
+  readonly serviceAccount: string;
+  readonly subject: string;
+  readonly usedBy: readonly string[];
+  readonly createdAt: string;
 };
 
 /** The Claude page: whether a token is set (it's never sent back) and the shared settings JSON. */
@@ -52,6 +67,8 @@ export type Container = Spec & {
   readonly restarts: number;
   /** The pod's DNS name. */
   readonly host: string;
+  /** The subject of its identity's tokens (sa-token): what other services grant to. */
+  readonly subject?: string;
   readonly ip?: string;
   readonly createdAt: string;
 };

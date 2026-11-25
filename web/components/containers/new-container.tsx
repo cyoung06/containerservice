@@ -10,8 +10,8 @@ import { Button } from "@/components/ui/button";
 import { ErrorText } from "@/components/ui/error-text";
 import { Icon } from "@/components/ui/icon";
 import { TextInput } from "@/components/ui/text-input";
-import { loadStorageClasses } from "@/lib/api/containers";
-import { post } from "@/lib/api/http";
+import { containerUrl, loadIdentities, loadStorageClasses } from "@/lib/api/containers";
+import { patch, post } from "@/lib/api/http";
 import type { Container, Mount, Spec } from "@/lib/api/types";
 import { useAction } from "@/lib/hooks/use-action";
 import { useResource } from "@/lib/hooks/use-resource";
@@ -94,7 +94,21 @@ const mountProblem = (
   return null;
 };
 
-export const NewContainer = () => {
+/** The form's rows for a container's mounts. */
+const rowsOf = (mounts: readonly Mount[]): MountRow[] =>
+  mounts.map((mount, key) => ({
+    key,
+    kind: mount.temp ? "temp" : "volume",
+    path: mount.path,
+    volume: mount.volume ?? "",
+    storageClass: null,
+    sizeGiB: "20",
+    readOnly: mount.readOnly ?? false,
+    sizeMiB: mount.sizeMiB ? String(mount.sizeMiB) : "",
+  }));
+
+/** New container, or (existing) the edit form of one: everything but the name can change. */
+export const NewContainer = ({ existing }: { readonly existing?: Container } = {}) => {
   const router = useRouter();
   const { volumes, refresh } = useContainers();
   const { user } = useSession();
@@ -104,15 +118,34 @@ export const NewContainer = () => {
     classes.data?.[0]?.name ??
     "";
   const action = useAction();
-  const [name, setName] = useState("");
-  const [image, setImage] = useState("");
-  const [cpu, setCpu] = useState("");
-  const [memory, setMemory] = useState("");
-  const [disk, setDisk] = useState("20");
-  const [debug, setDebug] = useState(false);
-  const [claudeLogin, setClaudeLogin] = useState(false);
-  const [rows, setRows] = useState<readonly MountRow[]>([]);
-  const [nextKey, setNextKey] = useState(0);
+  const [name, setName] = useState(existing?.name ?? "");
+  const [image, setImage] = useState(existing?.image ?? "");
+  const [cpu, setCpu] = useState(existing?.cpuMillis ? String(existing.cpuMillis / 1000) : "");
+  const [memory, setMemory] = useState(existing?.memoryMiB ? String(existing.memoryMiB) : "");
+  const [disk, setDisk] = useState(existing?.diskGiB ? String(existing.diskGiB) : "20");
+  const [debug, setDebug] = useState(existing?.debug ?? false);
+  const [claudeLogin, setClaudeLogin] = useState(existing?.claudeLogin ?? false);
+  const [fuseMounts, setFuseMounts] = useState(existing?.fuseMounts ?? false);
+  // Identity: a new one (by default, named after the container), one of yours, or none.
+  const identities = useResource(loadIdentities);
+  const [identityMode, setIdentityMode] = useState<"new" | "existing" | "none">(
+    existing ? (existing.identity ? "existing" : "none") : "new",
+  );
+  const [newIdentityName, setNewIdentityName] = useState<string | null>(null);
+  const [existingIdentity, setExistingIdentity] = useState(existing?.identity ?? "");
+  const newIdentity = newIdentityName ?? name;
+  const identityProblem =
+    identityMode === "new"
+      ? !nameRule.test(newIdentity)
+        ? "An identity's name: lowercase letters, digits and dashes, starting with a letter."
+        : identities.data?.some((item) => item.name === newIdentity)
+          ? `An identity named ${newIdentity} exists: choose it under "One of mine" to share it, or another name.`
+          : null
+      : identityMode === "existing" && !existingIdentity
+        ? "Pick an identity."
+        : null;
+  const [rows, setRows] = useState<readonly MountRow[]>(existing ? rowsOf(existing.mounts) : []);
+  const [nextKey, setNextKey] = useState(existing?.mounts.length ?? 0);
 
   const cpuValue = cpu.trim() === "" ? 0 : Number(cpu);
   const memoryValue = memory.trim() === "" ? 0 : Number(memory);
@@ -141,6 +174,8 @@ export const NewContainer = () => {
     cpuOk &&
     memoryOk &&
     diskOk &&
+    !(debug && fuseMounts) &&
+    identityProblem === null &&
     problems.every((problem) => problem === null);
 
   const update = (key: number, change: Partial<MountRow>) =>
@@ -205,11 +240,16 @@ export const NewContainer = () => {
       diskGiB: diskValue,
       debug,
       claudeLogin,
+      fuseMounts,
+      identity: identityMode === "none" ? "" : identityMode === "new" ? newIdentity : existingIdentity,
+      newIdentity: identityMode === "new",
     };
     void action.run(async () => {
-      const created = await post<Container>("/api/containers", spec);
+      const saved = existing
+        ? await patch<Container>(containerUrl(existing.name), spec)
+        : await post<Container>("/api/containers", spec);
       await refresh();
-      router.push(containerPath(created.name));
+      router.push(containerPath(saved.name));
     });
   };
 
@@ -221,7 +261,10 @@ export const NewContainer = () => {
 
   return (
     <>
-      <PageHeader title="New container" icon={<Icon name="plus" size={15} />} />
+      <PageHeader
+        title={existing ? `Edit ${existing.name}` : "New container"}
+        icon={<Icon name={existing ? "settings" : "plus"} size={15} />}
+      />
       <div className="scrollbar-thin min-h-0 min-w-0 flex-1 overflow-y-auto">
         <form
           className="mx-auto flex max-w-[720px] flex-col gap-6 px-4 py-5 md:px-8 md:py-8"
@@ -239,6 +282,7 @@ export const NewContainer = () => {
               id="name"
               data-autofocus=""
               value={name}
+              disabled={!!existing}
               onChange={(event) => setName(event.target.value.toLowerCase())}
               placeholder="pwn"
               autoComplete="off"
@@ -328,6 +372,7 @@ export const NewContainer = () => {
               type="checkbox"
               className="mt-0.5"
               checked={debug}
+              disabled={fuseMounts}
               onChange={(event) => setDebug(event.target.checked)}
             />
             <span>
@@ -336,6 +381,22 @@ export const NewContainer = () => {
               for anything that runs untrusted code or an agent: off, the
               container is hardened (the default seccomp profile, no raw
               sockets, no traffic to your other containers).
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-xs text-foreground-secondary">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={fuseMounts}
+              disabled={debug}
+              onChange={(event) => setFuseMounts(event.target.checked)}
+            />
+            <span>
+              <span className="font-medium text-foreground">FUSE mounts</span>:
+              mount filesystems with FUSE (sshfs, rclone), such as drive folders. Gives /dev/fuse and
+              CAP_SYS_ADMIN in the container&apos;s own user namespace, with profiles that allow FUSE
+              mounts and nothing more it would. Not with Debugging, whose lifted seccomp filter would let it
+              mount anything.
             </span>
           </label>
           <label className="flex items-start gap-2 text-xs text-foreground-secondary">
@@ -352,6 +413,64 @@ export const NewContainer = () => {
               read it.
             </span>
           </label>
+
+          <section className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1">
+              <h2 className="text-xs font-medium text-foreground-secondary">Identity</h2>
+              <p className="text-xs text-foreground-tertiary">
+                Who the container is to other services: its tokens (sa-token AUDIENCE) carry the identity&apos;s
+                subject, which you grant folders and the like to. Several containers may wear one identity and
+                share what&apos;s granted to it. Without one, the container has no Kubernetes token at all.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-4 text-xs text-foreground-secondary">
+              {(
+                [
+                  ["new", "A new identity"],
+                  ["existing", "One of mine"],
+                  ["none", "None"],
+                ] as const
+              ).map(([mode, label]) => (
+                <label key={mode} className="flex items-center gap-1.5">
+                  <input type="radio" name="identity-mode" checked={identityMode === mode} onChange={() => setIdentityMode(mode)} />
+                  {label}
+                </label>
+              ))}
+            </div>
+            {identityMode === "new" ? (
+              <FormField label="Its name" htmlFor="identity-name">
+                <TextInput
+                  id="identity-name"
+                  value={newIdentity}
+                  onChange={(event) => setNewIdentityName(event.target.value.toLowerCase())}
+                  placeholder={name || "agent"}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </FormField>
+            ) : null}
+            {identityMode === "existing" ? (
+              (identities.data ?? []).length > 0 ? (
+                <FormField label="Identity">
+                  <SelectField
+                    label="Identity"
+                    value={existingIdentity}
+                    onChange={setExistingIdentity}
+                    items={(identities.data ?? []).map((item) => ({
+                      value: item.name,
+                      label: item.name,
+                      description: item.usedBy.length ? `worn by ${item.usedBy.join(", ")}` : "worn by nothing",
+                    }))}
+                  />
+                </FormField>
+              ) : (
+                <p className="text-xs text-foreground-tertiary">You have no identities yet.</p>
+              )
+            ) : null}
+            {identityProblem && !(identityMode === "new" && newIdentity === "") ? (
+              <p className="text-xs text-danger">{identityProblem}</p>
+            ) : null}
+          </section>
 
           <section className="flex flex-col gap-3">
             <div className="flex flex-col gap-1">
@@ -540,10 +659,16 @@ export const NewContainer = () => {
               variant="primary"
               disabled={!ready}
               pending={action.pending}
-              leadingIcon={<Icon name="play" size={12} />}
+              leadingIcon={<Icon name={existing ? "check" : "play"} size={12} />}
             >
-              Launch
+              {existing ? "Save" : "Launch"}
             </Button>
+            {existing?.running ? (
+              <p className="text-xs text-foreground-tertiary">
+                Saving restarts the container: volumes keep their files; what runs in it (its tmux
+                session too) ends.
+              </p>
+            ) : null}
             <ErrorText message={action.error} />
           </div>
         </form>

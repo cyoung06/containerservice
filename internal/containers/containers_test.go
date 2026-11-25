@@ -7,6 +7,9 @@ import (
 	"log/slog"
 	"net/http"
 	"reflect"
+	"regexp"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,12 +25,67 @@ import (
 	"k8s.io/utils/ptr"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/cyoung06/containerservice/internal/store"
 )
 
 type fakeKeys struct {
 	mu              sync.Mutex
 	lines           []string
 	token, settings string
+	ids             []store.Identity
+	// vanish: the identity whose record is gone after vanishAfter reads (a delete meanwhile)
+	vanish      string
+	vanishAfter int
+}
+
+func (f *fakeKeys) AddIdentity(_ context.Context, id store.Identity, max int) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, x := range f.ids {
+		if x.Name == id.Name {
+			return false, store.ErrExists
+		}
+	}
+	if len(f.ids) >= max {
+		return false, nil
+	}
+	f.ids = append(f.ids, id)
+	return true, nil
+}
+
+func (f *fakeKeys) Identities(context.Context) ([]store.Identity, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]store.Identity(nil), f.ids...), nil
+}
+
+func (f *fakeKeys) Identity(_ context.Context, name string) (store.Identity, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, x := range f.ids {
+		if x.Name == name {
+			if f.vanish == name {
+				if f.vanishAfter--; f.vanishAfter == 0 {
+					f.ids = append(f.ids[:i], f.ids[i+1:]...)
+				}
+			}
+			return x, nil
+		}
+	}
+	return store.Identity{}, store.ErrNotFound
+}
+
+func (f *fakeKeys) DeleteIdentity(_ context.Context, name string) (store.Identity, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, x := range f.ids {
+		if x.Name == name {
+			f.ids = append(f.ids[:i], f.ids[i+1:]...)
+			return x, nil
+		}
+	}
+	return store.Identity{}, store.ErrNotFound
 }
 
 func (f *fakeKeys) ClaudeConfig(context.Context) (string, string, error) {
@@ -120,6 +178,7 @@ func TestCreateMakesTheStatefulSet(t *testing.T) {
 	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "work", Namespace: "cs", Labels: map[string]string{ManagedBy: managedByValue}}}
 	s, client, _ := newService(t, pvc)
 	sp := Spec{Name: "pwn", Image: "oci.syeyoung.dev/me/pwn:1", CPUMillis: 2000, MemoryMiB: 4096, DiskGiB: 30, Debug: true, ClaudeLogin: true,
+		Identity: "pwn", NewIdentity: true,
 		Mounts: []Mount{{Path: "/work", Volume: "work"}, {Path: "/scratch", Temp: true, SizeMiB: 1024}}}
 	c, err := s.Create(context.Background(), sp)
 	if err != nil {
@@ -136,8 +195,24 @@ func TestCreateMakesTheStatefulSet(t *testing.T) {
 	if *set.Spec.Replicas != 1 || set.Spec.ServiceName != ServiceName {
 		t.Errorf("replicas %d, service %q", *set.Spec.Replicas, set.Spec.ServiceName)
 	}
-	if *pod.HostUsers || *pod.AutomountServiceAccountToken {
-		t.Errorf("pod must be in its own user namespace without a token: hostUsers %v", *pod.HostUsers)
+	saName := pod.ServiceAccountName
+	if *pod.HostUsers || !regexp.MustCompile(`^identity-pwn-[a-z0-9]{8}$`).MatchString(saName) || !*pod.AutomountServiceAccountToken {
+		t.Errorf("pod: hostUsers %v, service account %q", *pod.HostUsers, saName)
+	}
+	if c.Identity != "pwn" || c.Subject != "system:serviceaccount:cs:"+saName {
+		t.Errorf("identity %q, subject %q", c.Identity, c.Subject)
+	}
+	if _, err := client.CoreV1().ServiceAccounts("cs").Get(context.Background(), saName, metav1.GetOptions{}); err != nil {
+		t.Errorf("service account: %v", err)
+	}
+	role, err := client.RbacV1().Roles("cs").Get(context.Background(), saName, metav1.GetOptions{})
+	if err != nil || len(role.Rules) != 1 || !reflect.DeepEqual(role.Rules[0].Resources, []string{"serviceaccounts/token"}) ||
+		!reflect.DeepEqual(role.Rules[0].ResourceNames, []string{saName}) || !reflect.DeepEqual(role.Rules[0].Verbs, []string{"create"}) {
+		t.Errorf("role: %v %+v", err, role)
+	}
+	rb, err := client.RbacV1().RoleBindings("cs").Get(context.Background(), saName, metav1.GetOptions{})
+	if err != nil || rb.RoleRef.Name != saName || rb.Subjects[0].Name != saName {
+		t.Errorf("role binding: %v %+v", err, rb)
 	}
 	sc := pod.Containers[0].SecurityContext
 	if sc.Privileged != nil || !reflect.DeepEqual(sc.Capabilities.Add, []corev1.Capability{"SYS_PTRACE"}) || sc.SeccompProfile.Type != corev1.SeccompProfileTypeUnconfined {
@@ -146,6 +221,7 @@ func TestCreateMakesTheStatefulSet(t *testing.T) {
 	if len(pod.ImagePullSecrets) != 1 || pod.ImagePullSecrets[0].Name != "pull" {
 		t.Errorf("pull secrets: %v", pod.ImagePullSecrets)
 	}
+	sp.NewIdentity = false // not read back
 	if got := specOf(set); !reflect.DeepEqual(got, sp) {
 		t.Errorf("spec doesn't read back:\n got %+v\nwant %+v", got, sp)
 	}
@@ -228,6 +304,163 @@ func TestSyncClaude(t *testing.T) {
 	}
 }
 
+func TestFuseMounts(t *testing.T) {
+	s, client, _ := newService(t)
+	ctx := context.Background()
+	if _, err := s.Create(ctx, Spec{Name: "both", Image: "ubuntu", FuseMounts: true, Debug: true}); status(err) != http.StatusBadRequest {
+		t.Errorf("debug + fuse: %v", err)
+	}
+	for _, debug := range []bool{false} {
+		name := "fuse"
+		if _, err := s.Create(ctx, Spec{Name: name, Image: "ubuntu", FuseMounts: true, Debug: debug}); err != nil {
+			t.Fatal(err)
+		}
+		set, _ := client.AppsV1().StatefulSets("cs").Get(ctx, name, metav1.GetOptions{})
+		c := set.Spec.Template.Spec.Containers[0]
+		sc := c.SecurityContext
+		if !slices.Contains(sc.Capabilities.Add, "SYS_ADMIN") || sc.Privileged != nil {
+			t.Errorf("%s: caps %+v", name, sc.Capabilities)
+		}
+		if sc.AppArmorProfile == nil || *sc.AppArmorProfile.LocalhostProfile != FuseProfile {
+			t.Errorf("%s: apparmor %+v", name, sc.AppArmorProfile)
+		}
+		wantSeccomp := corev1.SeccompProfileTypeLocalhost
+		if debug {
+			wantSeccomp = corev1.SeccompProfileTypeUnconfined
+		}
+		if sc.SeccompProfile.Type != wantSeccomp || (!debug && *sc.SeccompProfile.LocalhostProfile != "containerservice-fuse.json") {
+			t.Errorf("%s: seccomp %+v", name, sc.SeccompProfile)
+		}
+		if q := c.Resources.Limits[FuseResource]; q.Value() != 1 {
+			t.Errorf("%s: no /dev/fuse requested", name)
+		}
+		if !specOf(set).FuseMounts {
+			t.Errorf("%s: doesn't read back", name)
+		}
+	}
+}
+
+func TestUpdate(t *testing.T) {
+	s, client, _ := newService(t)
+	ctx := context.Background()
+	created, err := s.Create(ctx, Spec{Name: "box", Image: "ubuntu"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := created.Subject
+	eventually(t, s, func() bool { _, err := s.Get("box"); return err == nil })
+	if err := s.SetRunning(ctx, "box", false); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, s, func() bool { c, _ := s.Get("box"); return !c.Running })
+	if _, err := s.Update(ctx, "box", Spec{Name: "other", Image: "ubuntu"}); status(err) != http.StatusBadRequest {
+		t.Errorf("rename: %v", err)
+	}
+	if _, err := s.Update(ctx, "nope", Spec{Name: "nope", Image: "ubuntu"}); status(err) != http.StatusNotFound {
+		t.Errorf("missing: %v", err)
+	}
+	next := Spec{Name: "box", Image: "debian", Debug: true, ClaudeLogin: true, DiskGiB: 30, Identity: "box", NewIdentity: true,
+		Mounts: []Mount{{Path: "/home/dev", Volume: "box-home", New: &NewVolume{SizeGiB: 5}}}}
+	c, err := s.Update(ctx, "box", next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Running {
+		t.Error("a stopped container started on edit")
+	}
+	set, _ := client.AppsV1().StatefulSets("cs").Get(ctx, "box", metav1.GetOptions{})
+	if before != "" || set.Spec.Template.Spec.ServiceAccountName == "" || !*set.Spec.Template.Spec.AutomountServiceAccountToken {
+		t.Errorf("identity: none before (%q), a new one after: %q", before, set.Spec.Template.Spec.ServiceAccountName)
+	}
+	got := specOf(set)
+	next.Mounts[0].New = nil
+	next.NewIdentity = false
+	if !reflect.DeepEqual(got, next) {
+		t.Errorf("after edit:\n got %+v\nwant %+v", got, next)
+	}
+	if _, err := client.CoreV1().PersistentVolumeClaims("cs").Get(ctx, "box-home", metav1.GetOptions{}); err != nil {
+		t.Errorf("the new volume: %v", err)
+	}
+}
+
+func TestIdentities(t *testing.T) {
+	s, client, _ := newService(t)
+	ctx := context.Background()
+	// No identity: no token.
+	if _, err := s.Create(ctx, Spec{Name: "plain", Image: "ubuntu"}); err != nil {
+		t.Fatal(err)
+	}
+	set, _ := client.AppsV1().StatefulSets("cs").Get(ctx, "plain", metav1.GetOptions{})
+	if *set.Spec.Template.Spec.AutomountServiceAccountToken || set.Spec.Template.Spec.ServiceAccountName != "" {
+		t.Errorf("a container without an identity has a token: %q", set.Spec.Template.Spec.ServiceAccountName)
+	}
+	// A new identity, then a second container wearing it, then refusals.
+	a, err := s.Create(ctx, Spec{Name: "a", Image: "ubuntu", Identity: "shared", NewIdentity: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(ctx, Spec{Name: "b", Image: "ubuntu", Identity: "shared", NewIdentity: true}); status(err) != http.StatusConflict {
+		t.Errorf("new identity with a taken name: %v", err)
+	}
+	if _, err := s.Create(ctx, Spec{Name: "b", Image: "ubuntu", Identity: "nope"}); status(err) != http.StatusBadRequest {
+		t.Errorf("no such identity: %v", err)
+	}
+	b, err := s.Create(ctx, Spec{Name: "b", Image: "ubuntu", Identity: "shared"})
+	if err != nil || b.Subject != a.Subject {
+		t.Fatalf("existing identity: %v (%q vs %q)", err, b.Subject, a.Subject)
+	}
+	eventually(t, s, func() bool { u, _ := s.identityUsers(); return len(u["shared"]) == 2 })
+	ids, _ := s.Identities(ctx)
+	if len(ids) != 1 || !reflect.DeepEqual(ids[0].UsedBy, []string{"a", "b"}) {
+		t.Errorf("identities: %+v", ids)
+	}
+	if err := s.DeleteIdentity(ctx, "shared", ""); status(err) != http.StatusConflict {
+		t.Errorf("deleting a worn identity: %v", err)
+	}
+	// Deleting a with its identity is refused (b still wears it); a is gone anyway.
+	if err := s.Delete(ctx, "a", true); status(err) != http.StatusConflict {
+		t.Errorf("delete a with identity: %v", err)
+	}
+	eventually(t, s, func() bool { _, err := s.Get("a"); return err != nil })
+	// b is the last: deleting it with its identity removes the identity and its account.
+	if err := s.Delete(ctx, "b", true); err != nil {
+		t.Fatalf("delete b with identity: %v", err)
+	}
+	if ids, _ := s.Identities(ctx); len(ids) != 0 {
+		t.Errorf("identity left: %+v", ids)
+	}
+	sa := strings.TrimPrefix(a.Subject, "system:serviceaccount:cs:")
+	if _, err := client.CoreV1().ServiceAccounts("cs").Get(ctx, sa, metav1.GetOptions{}); err == nil {
+		t.Error("the account is still there")
+	}
+	// Made again under the same name: another account.
+	again, _ := s.CreateIdentity(ctx, "shared")
+	if again.ServiceAccount == sa {
+		t.Error("a subject was used again")
+	}
+}
+
+func TestAttachRacingDelete(t *testing.T) {
+	s, client, keys := newService(t)
+	ctx := context.Background()
+	id, err := s.CreateIdentity(ctx, "racy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Create reads it twice (the check, then the attach) before making its objects, then once more:
+	// deleted between the attach and that last read.
+	keys.vanish, keys.vanishAfter = "racy", 2
+	if _, err := s.Create(ctx, Spec{Name: "c", Image: "ubuntu", Identity: "racy"}); err == nil {
+		t.Fatal("attached an identity deleted meanwhile")
+	}
+	if _, err := client.CoreV1().ServiceAccounts("cs").Get(ctx, id.ServiceAccount, metav1.GetOptions{}); err == nil {
+		t.Error("left an account without a record")
+	}
+	if _, err := client.AppsV1().StatefulSets("cs").Get(ctx, "c", metav1.GetOptions{}); err == nil {
+		t.Error("made the container anyway")
+	}
+}
+
 func TestCreateMakesNewVolumes(t *testing.T) {
 	zfs := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "zfs"}, Provisioner: "zfs.csi.openebs.io"}
 	static := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "static"}, Provisioner: noProvisioner}
@@ -292,13 +525,13 @@ func TestStopStartDelete(t *testing.T) {
 	if _, err := s.Pod("box"); status(err) != http.StatusConflict {
 		t.Errorf("terminal into a pod-less container: %v, want a 409", err)
 	}
-	if err := s.Delete(ctx, "box"); err != nil {
+	if err := s.Delete(ctx, "box", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.AppsV1().StatefulSets("cs").Get(ctx, "box", metav1.GetOptions{}); err == nil {
 		t.Error("still there after delete")
 	}
-	if err := s.Delete(ctx, "nope"); status(err) != http.StatusNotFound {
+	if err := s.Delete(ctx, "nope", false); status(err) != http.StatusNotFound {
 		t.Errorf("deleting a missing container: %v", err)
 	}
 }
@@ -377,7 +610,7 @@ func TestVolumes(t *testing.T) {
 	if err := s.DeleteVolume(ctx, "work"); status(err) != http.StatusConflict {
 		t.Errorf("deleting a mounted volume: %v, want a 409", err)
 	}
-	if err := s.Delete(ctx, "box"); err != nil {
+	if err := s.Delete(ctx, "box", false); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, s, func() bool { _, err := s.Get("box"); return err != nil })

@@ -1,8 +1,11 @@
 import { get } from "./http";
-import type { Container, StorageClass, Volume } from "./types";
+import type { Container, Identity, StorageClass, Volume } from "./types";
 
 export const loadContainers = (): Promise<Container[]> =>
   get<{ containers: Container[] }>("/api/containers").then((body) => body.containers);
+
+export const loadIdentities = (): Promise<Identity[]> =>
+  get<{ identities: Identity[] }>("/api/identities").then((body) => body.identities);
 
 export const loadVolumes = (): Promise<Volume[]> => get<{ volumes: Volume[] }>("/api/volumes").then((body) => body.volumes);
 

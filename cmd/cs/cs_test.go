@@ -41,6 +41,15 @@ func TestSpecFor(t *testing.T) {
 	if len(sp.Mounts) != 1 || sp.Mounts[0].Volume != "agent-home" || sp.Mounts[0].New.SizeGiB != 20 || !sp.ClaudeLogin || sp.Debug {
 		t.Fatalf("%+v", sp)
 	}
+	if sp.Identity != "agent" || !sp.NewIdentity {
+		t.Errorf("default identity: %q new=%v", sp.Identity, sp.NewIdentity)
+	}
+	if sp := specFor("x", Preset{Image: "claude", Identity: "none"}, s); sp.Identity != "" {
+		t.Errorf("none: %q", sp.Identity)
+	}
+	if sp := specFor("x", Preset{Image: "claude", Identity: "shared"}, s); sp.Identity != "shared" || sp.NewIdentity {
+		t.Errorf("existing: %+v", sp)
+	}
 }
 
 func TestPickerKeys(t *testing.T) {

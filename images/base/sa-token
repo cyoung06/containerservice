@@ -1,0 +1,23 @@
+#!/bin/sh
+# sa-token AUDIENCE [SECONDS]: prints a token of this container's own service account for
+# AUDIENCE (default lifetime one hour). It is bound to this pod, but only the API server checks that:
+# a service verifying it by the issuer's keys (the drive does) honours it until it expires, pod or
+# no pod. So keep lifetimes short; the account (and so the subject) is never reused, so a token
+# outliving its container matches no other container's grants.
+# The service account's mounted token may do exactly this and nothing more (containerservice's
+# per-container Role). For the drive: sa-token https://files.drive.syeyoung.dev
+set -eu
+aud=${1:?usage: sa-token AUDIENCE [SECONDS]}
+ttl=${2:-3600}
+dir=/var/run/secrets/kubernetes.io/serviceaccount
+[ -r "$dir/token" ] || { echo "sa-token: no service account token in this container" >&2; exit 1; }
+# Who we are, from the token itself (sshd and su drop the environment): system:serviceaccount:<ns>:<name>.
+payload=$(cut -d. -f2 "$dir/token" | tr '_-' '/+')
+case $(( ${#payload} % 4 )) in 2) payload="$payload==";; 3) payload="$payload=";; esac
+sub=$(printf %s "$payload" | base64 -d | jq -r .sub)
+ns=$(echo "$sub" | cut -d: -f3); sa=$(echo "$sub" | cut -d: -f4)
+pod=$(hostname)
+body=$(jq -n --arg aud "$aud" --argjson ttl "$ttl" --arg pod "$pod" \
+  '{apiVersion:"authentication.k8s.io/v1",kind:"TokenRequest",spec:{audiences:[$aud],expirationSeconds:$ttl,boundObjectRef:{apiVersion:"v1",kind:"Pod",name:$pod}}}')
+curl -fsS --cacert "$dir/ca.crt" -H "Authorization: Bearer $(cat "$dir/token")" -H "Content-Type: application/json" \
+  -X POST --data "$body" "https://kubernetes.default.svc/api/v1/namespaces/$ns/serviceaccounts/$sa/token" | jq -r .status.token

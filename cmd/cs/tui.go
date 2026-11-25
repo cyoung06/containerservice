@@ -29,6 +29,7 @@ type picked struct {
 	connect, create string // a container's name
 	preset          string
 	session         string // the tmux session to attach ("": a plain shell)
+	edit            string // a container whose settings to edit
 }
 
 type model struct {
@@ -220,8 +221,8 @@ func (m model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.status = "Not deleted."
 					return m, nil
 				}
-				name := c.Name
-				return m, act(func() error { return call("DELETE", "/api/containers/"+pathName(name), nil, nil) }, name+" deleted (volumes kept).")
+				cc := c
+				return m, act(func() error { return call("DELETE", "/api/containers/"+pathName(cc.Name)+deleteQuery(cc), nil, nil) }, cc.Name+" deleted (volumes kept).")
 			}
 			return m, nil
 		}
@@ -258,6 +259,11 @@ func (m model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if ok {
 			m.result = picked{connect: c.Name, session: "console"}
+			return m, tea.Quit
+		}
+	case "e":
+		if ok {
+			m.result = picked{edit: c.Name}
 			return m, tea.Quit
 		}
 	case "p":
@@ -359,7 +365,7 @@ func (m model) View() string {
 		if m.filter != "" {
 			b.WriteString(dim.Render("filter: "+m.filter+" (/ to change, esc in it to clear)") + "\n")
 		}
-		b.WriteString(dim.Render("⏎ connect (tmux console) · p plain shell · t other tmux session · n new · s start/stop · d delete · / filter · q quit") + "\n")
+		b.WriteString(dim.Render("⏎ connect (tmux console) · p plain shell · t other tmux session · n new · e edit · s start/stop · d delete · / filter · q quit") + "\n")
 	}
 	if m.status != "" {
 		b.WriteString(m.status + "\n")
@@ -408,6 +414,8 @@ func pick() {
 	switch {
 	case r.connect != "":
 		connect(r.connect, r.session, false)
+	case r.edit != "":
+		edit(r.edit)
 	case r.create != "":
 		create(r.create, r.preset, presets.Presets[r.preset])
 	}

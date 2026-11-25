@@ -185,3 +185,58 @@ func (p *Postgres) ClaudeConfig(ctx context.Context) (string, string, error) {
 	c, err := p.Claude(ctx)
 	return c.Token, c.Settings, err
 }
+
+// Identity is an identity the owner made: Name is theirs, ServiceAccount the account it is.
+type Identity struct {
+	Name           string
+	ServiceAccount string
+	CreatedAt      time.Time
+}
+
+// AddIdentity records an identity unless there are max already; ErrExists if the name is taken.
+func (p *Postgres) AddIdentity(ctx context.Context, id Identity, max int) (bool, error) {
+	tag, err := p.pool.Exec(ctx, `INSERT INTO identities (name, service_account)
+		SELECT $1, $2 WHERE (SELECT count(*) FROM identities) < $3`, id.Name, id.ServiceAccount, max)
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) && pe.Code == "23505" {
+		return false, ErrExists
+	}
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// Identities is every identity, by name.
+func (p *Postgres) Identities(ctx context.Context) ([]Identity, error) {
+	rows, err := p.pool.Query(ctx, `SELECT name, service_account, created_at FROM identities ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Identity, error) {
+		var id Identity
+		err := r.Scan(&id.Name, &id.ServiceAccount, &id.CreatedAt)
+		return id, err
+	})
+}
+
+// Identity is the identity called name; ErrNotFound if there is none.
+func (p *Postgres) Identity(ctx context.Context, name string) (Identity, error) {
+	id := Identity{Name: name}
+	err := p.pool.QueryRow(ctx, `SELECT service_account, created_at FROM identities WHERE name = $1`, name).Scan(&id.ServiceAccount, &id.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return id, ErrNotFound
+	}
+	return id, err
+}
+
+// DeleteIdentity removes the record and returns what it was (ErrNotFound if there was none). The
+// record goes first, so that an attach that comes meanwhile finds no identity.
+func (p *Postgres) DeleteIdentity(ctx context.Context, name string) (Identity, error) {
+	id := Identity{Name: name}
+	err := p.pool.QueryRow(ctx, `DELETE FROM identities WHERE name = $1 RETURNING service_account, created_at`, name).Scan(&id.ServiceAccount, &id.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return id, ErrNotFound
+	}
+	return id, err
+}

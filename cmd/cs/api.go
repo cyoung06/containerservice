@@ -40,10 +40,45 @@ type spec struct {
 	DiskGiB     int     `json:"diskGiB"`
 	Debug       bool    `json:"debug"`
 	ClaudeLogin bool    `json:"claudeLogin"`
+	FuseMounts  bool    `json:"fuseMounts"`
+	Identity    string  `json:"identity"`
+	NewIdentity bool    `json:"newIdentity,omitempty"`
+}
+
+type identity struct {
+	Name    string   `json:"name"`
+	Subject string   `json:"subject"`
+	UsedBy  []string `json:"usedBy"`
+}
+
+func identities() []identity {
+	var got struct{ Identities []identity }
+	must(call("GET", "/api/identities", nil, &got))
+	return got.Identities
+}
+
+// deleteQuery is what to add to a container's DELETE: its identity goes too when nothing else
+// wears it (as the web console's default).
+func deleteQuery(c container) string {
+	if c.Identity == "" {
+		return ""
+	}
+	for _, id := range identities() {
+		if id.Name == c.Identity {
+			for _, u := range id.UsedBy {
+				if u != c.Name {
+					return ""
+				}
+			}
+			return "?identity=delete"
+		}
+	}
+	return ""
 }
 
 type container struct {
 	spec
+	Subject string `json:"subject"`
 	Running bool   `json:"running"`
 	State   string `json:"state"`
 	Message string `json:"message"`

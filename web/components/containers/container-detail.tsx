@@ -14,12 +14,13 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorText } from "@/components/ui/error-text";
 import { Icon } from "@/components/ui/icon";
 import { TextInput } from "@/components/ui/text-input";
-import { containerUrl } from "@/lib/api/containers";
+import { containerUrl, loadIdentities } from "@/lib/api/containers";
 import { post, remove } from "@/lib/api/http";
 import type { Container } from "@/lib/api/types";
 import { formatTime } from "@/lib/formatting/format";
 import { useAction } from "@/lib/hooks/use-action";
-import { sshCommand, sshConfig, terminalPath } from "@/lib/paths";
+import { useResource } from "@/lib/hooks/use-resource";
+import { editPath, sshCommand, sshConfig, terminalPath } from "@/lib/paths";
 
 import { ContainerStateBadge } from "./container-state";
 import { useContainers } from "./containers-context";
@@ -39,6 +40,11 @@ const DeleteDialog = ({ container, onClose }: { readonly container: Container; r
   const action = useAction();
   const [typed, setTyped] = useState("");
   const confirmed = typed === container.name;
+  const identities = useResource(loadIdentities);
+  const own = identities.data?.find((item) => item.name === container.identity);
+  const alone = own !== undefined && own.usedBy.every((name) => name === container.name);
+  const [withIdentity, setWithIdentity] = useState<boolean | null>(null);
+  const deleteIdentity = (withIdentity ?? true) && alone;
   return (
     <DialogFrame
       title={`Delete ${container.name}?`}
@@ -50,7 +56,7 @@ const DeleteDialog = ({ container, onClose }: { readonly container: Container; r
       error={action.error}
       onSubmit={() => {
         if (confirmed) {
-          void action.run(() => remove(containerUrl(container.name))).then((done) => {
+          void action.run(() => remove(containerUrl(container.name) + (deleteIdentity ? "?identity=delete" : ""))).then((done) => {
             if (done) {
               router.push("/");
             }
@@ -74,11 +80,23 @@ const DeleteDialog = ({ container, onClose }: { readonly container: Container; r
           spellCheck={false}
         />
       </label>
+      {container.identity ? (
+        <label className="mt-3 flex items-start gap-2 text-[13px] text-foreground-secondary">
+          <input type="checkbox" className="mt-0.5" checked={deleteIdentity} disabled={!alone} onChange={(event) => setWithIdentity(event.target.checked)} />
+          <span>
+            Also delete its identity <span className="font-medium text-foreground">{container.identity}</span>
+            {alone
+              ? " (what was granted to it goes with it; keep it to give its access to a later container)"
+              : ` (also worn by ${own?.usedBy.filter((name) => name !== container.name).join(", ") ?? "other containers"}, so it stays)`}
+          </span>
+        </label>
+      ) : null}
     </DialogFrame>
   );
 };
 
 export const ContainerDetail = () => {
+  const router = useRouter();
   const name = useSearchParams().get("name") ?? "";
   const { containers, refresh } = useContainers();
   const { user } = useSession();
@@ -117,6 +135,9 @@ export const ContainerDetail = () => {
           Start
         </Button>
       )}
+      <Button leadingIcon={<Icon name="settings" size={12} />} onClick={() => router.push(editPath(container.name))}>
+        Edit
+      </Button>
       <Button variant="ghost" leadingIcon={<Icon name="trash" size={12} />} className="hover:text-danger" onClick={() => setDeleting(true)}>
         Delete
       </Button>
@@ -171,6 +192,18 @@ export const ContainerDetail = () => {
                     : "Hardened: default seccomp profile, no raw sockets, no traffic to other containers",
                 ],
                 ["Claude login", container.claudeLogin ? "Shared token mounted" : null],
+                ["FUSE mounts", container.fuseMounts ? "Allowed (/dev/fuse, namespaced SYS_ADMIN)" : null],
+                [
+                  "Identity",
+                  container.identity ? (
+                    <span key="identity" className="flex flex-col gap-0.5">
+                      <span>{container.identity}</span>
+                      <span className="font-mono text-xs text-foreground-tertiary [overflow-wrap:anywhere]">{container.subject}</span>
+                    </span>
+                  ) : (
+                    "None (no Kubernetes token)"
+                  ),
+                ],
                 ["Restarts", container.restarts > 0 ? String(container.restarts) : null],
                 ["Address", <span key="host" className="font-mono text-xs">{container.host}{container.ip ? ` (${container.ip})` : ""}</span>],
                 ["Created", formatTime(container.createdAt)],

@@ -17,6 +17,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+
+	"github.com/cyoung06/containerservice/internal/store"
 )
 
 // MainContainer is the name of the container in each pod (what the terminal execs into).
@@ -40,6 +42,15 @@ type Spec struct {
 	// ClaudeLogin mounts the owner's Claude Code token at ClaudeLoginPath (the claude image
 	// exports it as CLAUDE_CODE_OAUTH_TOKEN). Every container gets the shared settings.
 	ClaudeLogin bool `json:"claudeLogin"`
+	// FuseMounts lets the container mount FUSE filesystems (sshfs, rclone): /dev/fuse, CAP_SYS_ADMIN
+	// in its own user namespace, and the node's containerservice-fuse seccomp and AppArmor profiles,
+	// which allow FUSE mounts and nothing more of what SYS_ADMIN would.
+	FuseMounts bool `json:"fuseMounts"`
+	// Identity is the identity the container wears ("": none, and no Kubernetes token in it).
+	// NewIdentity, on a create or an edit: make it first (a name that exists is refused). Never
+	// read back.
+	Identity    string `json:"identity"`
+	NewIdentity bool   `json:"newIdentity,omitempty"`
 }
 
 // Mount is a volume (a PVC by name) or a temporary folder (Temp) at Path.
@@ -67,10 +78,12 @@ type Container struct {
 	Running bool `json:"running"`
 	// State is "stopped", "stopping", "pending", "running", or why the container is waiting
 	// (ImagePullBackOff, CrashLoopBackOff, ...).
-	State     string    `json:"state"`
-	Message   string    `json:"message,omitempty"`
-	Restarts  int32     `json:"restarts"`
-	Host      string    `json:"host"` // the pod's DNS name, what the bastion connects to
+	State    string `json:"state"`
+	Message  string `json:"message,omitempty"`
+	Restarts int32  `json:"restarts"`
+	Host     string `json:"host"` // the pod's DNS name, what the bastion connects to
+	// Subject is that of its identity's tokens (sa-token), what other services grant to.
+	Subject   string    `json:"subject,omitempty"`
 	IP        string    `json:"ip,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }
@@ -84,6 +97,10 @@ const (
 	// DebugLabel marks a debugging container's pod; the network policy that keeps hardened ones
 	// to themselves selects pods without it.
 	DebugLabel = "containerservice.syeyoung.dev/debug"
+	// FuseResource is /dev/fuse (cmd/fuse-device-plugin); FuseProfile the node's seccomp
+	// (FuseProfile+".json" in the kubelet's seccomp directory) and AppArmor profiles.
+	FuseResource = corev1.ResourceName("syeyoung.dev/fuse")
+	FuseProfile  = "containerservice-fuse"
 )
 
 // A StatefulSet's name goes into its pods' controller-revision-hash label (name + "-" + 10
@@ -113,6 +130,18 @@ func (sp *Spec) Check() error {
 	}
 	if sp.DiskGiB < 1 || sp.DiskGiB > MaxDiskGiB {
 		return refuse(http.StatusBadRequest, "The disk limit is 1–%d GiB.", MaxDiskGiB)
+	}
+	if sp.Identity != "" && !nameRE.MatchString(sp.Identity) {
+		return refuse(http.StatusBadRequest, "An identity's name is 1–52 lowercase letters, digits and dashes, starting with a letter.")
+	}
+	// Debugging lifts the seccomp filter, and with it the block on the new mount API (fsopen,
+	// open_tree, ...), which AppArmor doesn't see: with SYS_ADMIN that would be any mount, in the
+	// namespace the terminal joins. One or the other.
+	if sp.Debug && sp.FuseMounts {
+		return refuse(http.StatusBadRequest, "Debugging and FUSE mounts can't be on together: without the seccomp filter, FUSE's SYS_ADMIN would allow any mount.")
+	}
+	if sp.NewIdentity && sp.Identity == "" {
+		return refuse(http.StatusBadRequest, "A new identity needs a name.")
 	}
 	if len(sp.Mounts) > maxMounts {
 		return refuse(http.StatusBadRequest, "At most %d mounts.", maxMounts)
@@ -159,9 +188,13 @@ func (sp *Spec) Check() error {
 	return nil
 }
 
-// statefulSet is the object a spec becomes.
-func (s *Service) statefulSet(sp Spec) *appsv1.StatefulSet {
+// statefulSet is the object a spec becomes; serviceAccount is its identity's ("": none).
+func (s *Service) statefulSet(sp Spec, serviceAccount string) *appsv1.StatefulSet {
 	podLabels := map[string]string{ManagedBy: managedByValue, NameLabel: sp.Name}
+	annotations := map[string]string{}
+	if sp.Identity != "" {
+		annotations[IdentityAnnotation] = sp.Identity
+	}
 	if sp.Debug {
 		podLabels[DebugLabel] = "true"
 	}
@@ -221,10 +254,23 @@ func (s *Service) statefulSet(sp Spec) *appsv1.StatefulSet {
 			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeUnconfined},
 		}
 	}
+	// FUSE mounts (never with Debugging, see Check): SYS_ADMIN counts in the pod's user namespace
+	// only (hostUsers: false); the seccomp profile lets mount/umount through and nothing else
+	// SYS_ADMIN would, and AppArmor allows fstype fuse and fuse.* only.
+	if sp.FuseMounts {
+		security.Capabilities.Add = append(security.Capabilities.Add, "SYS_ADMIN")
+		security.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To(FuseProfile + ".json")}
+		security.AppArmorProfile = &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeLocalhost, LocalhostProfile: ptr.To(FuseProfile)}
+		limits[FuseResource] = *resource.NewQuantity(1, resource.DecimalSI)
+		requests[FuseResource] = *resource.NewQuantity(1, resource.DecimalSI)
+	}
 	pod := corev1.PodSpec{
 		// Root inside is root of the pod's own user namespace only.
-		HostUsers:                    ptr.To(false),
-		AutomountServiceAccountToken: ptr.To(false),
+		HostUsers: ptr.To(false),
+		// Its identity's service account, whose token can do one thing: mint tokens for that
+		// account, for any audience (identity.go). Without an identity, no token at all.
+		ServiceAccountName:           serviceAccount,
+		AutomountServiceAccountToken: ptr.To(serviceAccount != ""),
 		EnableServiceLinks:           ptr.To(false),
 		Containers: []corev1.Container{{
 			Name:            MainContainer,
@@ -245,7 +291,7 @@ func (s *Service) statefulSet(sp Spec) *appsv1.StatefulSet {
 			ServiceName:         ServiceName,
 			PodManagementPolicy: appsv1.ParallelPodManagement,
 			Selector:            &metav1.LabelSelector{MatchLabels: map[string]string{NameLabel: sp.Name}},
-			Template:            corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: podLabels}, Spec: pod},
+			Template:            corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: podLabels, Annotations: annotations}, Spec: pod},
 		},
 	}
 }
@@ -274,6 +320,8 @@ func specOf(set *appsv1.StatefulSet) Spec {
 		sp.DiskGiB = int(q.Value() >> 30)
 	}
 	sp.Debug = set.Spec.Template.Labels[DebugLabel] == "true"
+	_, sp.FuseMounts = main.Resources.Limits[FuseResource]
+	sp.Identity = set.Spec.Template.Annotations[IdentityAnnotation]
 	vols := map[string]corev1.Volume{}
 	for _, v := range pod.Volumes {
 		vols[v.Name] = v
@@ -305,6 +353,9 @@ func (s *Service) Host(name string) string {
 
 func (s *Service) view(set *appsv1.StatefulSet) Container {
 	c := Container{Spec: specOf(set), Running: ptr.Deref(set.Spec.Replicas, 1) > 0, Host: s.Host(set.Name), CreatedAt: set.CreationTimestamp.UTC()}
+	if c.Identity != "" {
+		c.Subject = s.Subject(set.Spec.Template.Spec.ServiceAccountName)
+	}
 	pod, err := s.pods.Get(set.Name + "-0")
 	switch {
 	case err != nil && c.Running:
@@ -361,9 +412,37 @@ func (s *Service) Get(name string) (Container, error) {
 	return s.view(set), nil
 }
 
-// Create makes the container and starts it, making its new volumes first. Everything is checked
-// before anything is made; should a step fail after that, the volumes made stay, as volumes. The
-// name is claimed by the API server: creating a StatefulSet that exists fails.
+// prepareMounts checks a spec's volumes (an existing one must be there, a new one must not, and
+// its class must make volumes) and then makes the new ones. Everything is checked before anything
+// is made; should a step fail after that, the volumes made stay, as volumes.
+func (s *Service) prepareMounts(ctx context.Context, sp Spec) error {
+	for _, m := range sp.Mounts {
+		_, err := s.vols.Get(m.Volume)
+		switch {
+		case m.Temp:
+		case m.New == nil && err != nil:
+			return refuse(http.StatusBadRequest, "There is no volume %q.", m.Volume)
+		case m.New != nil && err == nil:
+			return refuse(http.StatusConflict, "A volume named %q already exists.", m.Volume)
+		case m.New != nil:
+			if err := s.checkClass(ctx, m.New.StorageClass); err != nil {
+				return err
+			}
+		}
+	}
+	for _, m := range sp.Mounts {
+		if m.New != nil {
+			if _, err := s.CreateVolume(ctx, m.Volume, m.New.StorageClass, m.New.SizeGiB); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Create makes the container and starts it, making its new volumes first, then its host key and
+// its identity (service account). The name is claimed by the API server: creating a StatefulSet
+// that exists fails.
 func (s *Service) Create(ctx context.Context, sp Spec) (Container, error) {
 	if err := sp.Check(); err != nil {
 		return Container{}, err
@@ -371,35 +450,62 @@ func (s *Service) Create(ctx context.Context, sp Spec) (Container, error) {
 	if _, err := s.sets.Get(sp.Name); err == nil {
 		return Container{}, refuse(http.StatusConflict, "A container named %q already exists.", sp.Name)
 	}
-	for _, m := range sp.Mounts {
-		_, err := s.vols.Get(m.Volume)
-		switch {
-		case m.Temp:
-		case m.New == nil && err != nil:
-			return Container{}, refuse(http.StatusBadRequest, "There is no volume %q.", m.Volume)
-		case m.New != nil && err == nil:
-			return Container{}, refuse(http.StatusConflict, "A volume named %q already exists.", m.Volume)
-		case m.New != nil:
-			if err := s.checkClass(ctx, m.New.StorageClass); err != nil {
-				return Container{}, err
-			}
-		}
+	if err := s.checkIdentity(ctx, sp); err != nil {
+		return Container{}, err
 	}
-	for _, m := range sp.Mounts {
-		if m.New != nil {
-			if _, err := s.CreateVolume(ctx, m.Volume, m.New.StorageClass, m.New.SizeGiB); err != nil {
-				return Container{}, err
-			}
-		}
+	if err := s.prepareMounts(ctx, sp); err != nil {
+		return Container{}, err
 	}
-	set, err := s.client.AppsV1().StatefulSets(s.cfg.Namespace).Create(ctx, s.statefulSet(sp), metav1.CreateOptions{})
+	sa, err := s.attachIdentity(ctx, sp)
+	if err != nil {
+		return Container{}, err
+	}
+	set, err := s.client.AppsV1().StatefulSets(s.cfg.Namespace).Create(ctx, s.statefulSet(sp, sa), metav1.CreateOptions{})
 	if err != nil {
 		return Container{}, kubeError(err, fmt.Sprintf("A container named %q", sp.Name))
 	}
+	// Without its host key the pod never starts: take the container back then.
 	if err := s.createHostKey(ctx, set); err != nil {
-		// Without it the pod never starts: take the container back.
-		derr := s.client.AppsV1().StatefulSets(s.cfg.Namespace).Delete(ctx, set.Name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
-		return Container{}, errors.Join(err, derr)
+		return Container{}, s.rollback(ctx, set, err)
+	}
+	return s.view(set), nil
+}
+
+func (s *Service) rollback(ctx context.Context, set *appsv1.StatefulSet, err error) error {
+	derr := s.client.AppsV1().StatefulSets(s.cfg.Namespace).Delete(ctx, set.Name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
+	return errors.Join(err, derr)
+}
+
+// Update changes a container's settings to sp (its name stays): new volumes are made first, then
+// the pod template is replaced, which restarts a running container's pod (volumes keep their data;
+// what ran in it is gone). A stopped container stays stopped. Settings are the whole spec, checked
+// as for Create.
+func (s *Service) Update(ctx context.Context, name string, sp Spec) (Container, error) {
+	if sp.Name != name {
+		return Container{}, refuse(http.StatusBadRequest, "A container's name can't change.")
+	}
+	if err := sp.Check(); err != nil {
+		return Container{}, err
+	}
+	cur, err := s.sets.Get(name)
+	if err != nil || cur.Labels[ManagedBy] != managedByValue {
+		return Container{}, refuse(http.StatusNotFound, "There is no container %q.", name)
+	}
+	if err := s.checkIdentity(ctx, sp); err != nil {
+		return Container{}, err
+	}
+	if err := s.prepareMounts(ctx, sp); err != nil {
+		return Container{}, err
+	}
+	sa, err := s.attachIdentity(ctx, sp)
+	if err != nil {
+		return Container{}, err
+	}
+	next := cur.DeepCopy()
+	next.Spec.Template = s.statefulSet(sp, sa).Spec.Template
+	set, err := s.client.AppsV1().StatefulSets(s.cfg.Namespace).Update(ctx, next, metav1.UpdateOptions{})
+	if err != nil {
+		return Container{}, kubeError(err, fmt.Sprintf("The container %q", name))
 	}
 	return s.view(set), nil
 }
@@ -419,12 +525,51 @@ func (s *Service) SetRunning(ctx context.Context, name string, running bool) err
 }
 
 // Delete removes the container; its pod goes with it. Volumes stay.
-func (s *Service) Delete(ctx context.Context, name string) error {
-	if _, err := s.Get(name); err != nil {
+func (s *Service) Delete(ctx context.Context, name string, withIdentity bool) error {
+	c, err := s.Get(name)
+	if err != nil {
 		return err
 	}
-	err := s.client.AppsV1().StatefulSets(s.cfg.Namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
-	return kubeError(err, fmt.Sprintf("The container %q", name))
+	err = s.client.AppsV1().StatefulSets(s.cfg.Namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
+	if err != nil {
+		return kubeError(err, fmt.Sprintf("The container %q", name))
+	}
+	// Its identity too, if asked and nothing else wears it (DeleteIdentity refuses then).
+	if withIdentity && c.Identity != "" {
+		return s.DeleteIdentity(ctx, c.Identity, name)
+	}
+	return nil
+}
+
+// checkIdentity refuses a spec whose identity is wrong before anything is made: a new one whose
+// name is taken, or an existing one that isn't there.
+func (s *Service) checkIdentity(ctx context.Context, sp Spec) error {
+	if sp.Identity == "" {
+		return nil
+	}
+	_, err := s.keys.Identity(ctx, sp.Identity)
+	switch {
+	case sp.NewIdentity && err == nil:
+		return refuse(http.StatusConflict, "An identity named %q exists already.", sp.Identity)
+	case sp.NewIdentity && errors.Is(err, store.ErrNotFound):
+		return nil
+	case errors.Is(err, store.ErrNotFound):
+		return refuse(http.StatusBadRequest, "There is no identity %q.", sp.Identity)
+	}
+	return err
+}
+
+// attachIdentity is the service account of the spec's identity, made first if it's new.
+func (s *Service) attachIdentity(ctx context.Context, sp Spec) (string, error) {
+	if sp.Identity == "" {
+		return "", nil
+	}
+	if sp.NewIdentity {
+		id, err := s.CreateIdentity(ctx, sp.Identity)
+		return id.ServiceAccount, err
+	}
+	id, err := s.identity(ctx, sp.Identity)
+	return id.ServiceAccount, err
 }
 
 // Pod is the pod a container's terminal execs into.

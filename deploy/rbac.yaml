@@ -28,6 +28,15 @@ rules:
     resourceNames: [authorized-keys, claude-login]
     verbs: [get, update]
   - apiGroups: [""]
+    resources: [serviceaccounts]    # identities: identity-<name>-<random>, made and deleted with them
+    verbs: [create, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings] # an identity's: its account may mint its own tokens, nothing else
+    verbs: [create, delete]
+  - apiGroups: [""]
+    resources: [serviceaccounts/token] # held so it can grant it (RBAC grants only what it holds); it can exec into containers anyway
+    verbs: [create]
+  - apiGroups: [""]
     resources: [configmaps]         # claude-settings only; create can't be limited by name
     verbs: [create]
   - apiGroups: [""]

@@ -31,6 +31,13 @@ containerservice doesn't change images. An image to use with it should:
   (`sshd -h`): each container gets its own, in the Secret `<name>-hostkey`, deleted with the
   container.
 
+A container's identity elsewhere is an **identity** it wears: a service account (`identity-<name>-<random>`,
+never reused) whose mounted token can mint tokens for that account for any audience and do nothing
+else, which the images' `sa-token` does. New containers get their own by default; identities can be
+made, shared between containers and deleted on their own page. "FUSE mounts" needs the node's
+`containerservice-fuse` seccomp and AppArmor profiles (`host/` in the cluster repo) and the FUSE
+device plugin (`cmd/fuse-device-plugin`), and can't be on with Debugging.
+
 `images/` has images that do all this (Ubuntu 24.04, user `dev` with passwordless sudo, home at
 `/home/dev`): `base`, `pwn` (gdb/pwndbg, pwntools, ROPgadget, one_gadget, radare2, qemu-user) and
 `claude` (Claude Code, Node, gh, Go, uv). `images/build.sh` builds and pushes them to

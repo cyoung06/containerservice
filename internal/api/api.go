@@ -72,6 +72,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/containers", a.read(a.list))
 	mux.HandleFunc("GET /api/containers/{name}", a.read(a.get))
 	mux.HandleFunc("POST /api/containers", a.write(a.create))
+	mux.HandleFunc("PATCH /api/containers/{name}", a.write(a.update))
 	mux.HandleFunc("POST /api/containers/{name}/start", a.write(a.running(true)))
 	mux.HandleFunc("POST /api/containers/{name}/stop", a.write(a.running(false)))
 	mux.HandleFunc("DELETE /api/containers/{name}", a.write(a.remove))
@@ -84,6 +85,9 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/keys", a.read(a.listKeys))
 	mux.HandleFunc("POST /api/keys", a.write(a.addKey))
 	mux.HandleFunc("DELETE /api/keys/{id}", a.write(a.deleteKey))
+	mux.HandleFunc("GET /api/identities", a.read(a.identities))
+	mux.HandleFunc("POST /api/identities", a.write(a.createIdentity))
+	mux.HandleFunc("DELETE /api/identities/{name}", a.write(a.deleteIdentity))
 	mux.HandleFunc("GET /api/claude", a.read(a.claude))
 	mux.HandleFunc("PUT /api/claude/token", a.write(a.setClaudeToken))
 	mux.HandleFunc("PUT /api/claude/settings", a.write(a.setClaudeSettings))
@@ -233,6 +237,17 @@ func (a *API) create(r *http.Request, _ auth.Session) (int, any, error) {
 	return http.StatusCreated, c, err
 }
 
+// update replaces a container's settings (the whole spec; the name can't change).
+func (a *API) update(r *http.Request, _ auth.Session) (int, any, error) {
+	var sp containers.Spec
+	if err := decode(r, &sp, "a container's settings"); err != nil {
+		return 0, nil, err
+	}
+	sp.Image = strings.TrimSpace(sp.Image)
+	c, err := a.containers.Update(r.Context(), r.PathValue("name"), sp)
+	return http.StatusOK, c, err
+}
+
 func (a *API) running(on bool) handler {
 	return func(r *http.Request, _ auth.Session) (int, any, error) {
 		return http.StatusNoContent, nil, a.containers.SetRunning(r.Context(), r.PathValue("name"), on)
@@ -240,7 +255,8 @@ func (a *API) running(on bool) handler {
 }
 
 func (a *API) remove(r *http.Request, _ auth.Session) (int, any, error) {
-	return http.StatusNoContent, nil, a.containers.Delete(r.Context(), r.PathValue("name"))
+	// ?identity=delete: its identity too, if no other container wears it.
+	return http.StatusNoContent, nil, a.containers.Delete(r.Context(), r.PathValue("name"), r.URL.Query().Get("identity") == "delete")
 }
 
 // shell is what the terminal runs: the tmux session "console" (made or attached, so a terminal
@@ -457,4 +473,24 @@ func (a *API) setClaudeSettings(r *http.Request, _ auth.Session) (int, any, erro
 		return 0, nil, err
 	}
 	return http.StatusNoContent, nil, a.containers.SyncClaude(r.Context())
+}
+
+func (a *API) identities(r *http.Request, _ auth.Session) (int, any, error) {
+	ids, err := a.containers.Identities(r.Context())
+	return http.StatusOK, map[string]any{"identities": ids}, err
+}
+
+func (a *API) createIdentity(r *http.Request, _ auth.Session) (int, any, error) {
+	var b struct {
+		Name string `json:"name"`
+	}
+	if err := decode(r, &b, "an identity"); err != nil {
+		return 0, nil, err
+	}
+	id, err := a.containers.CreateIdentity(r.Context(), strings.TrimSpace(b.Name))
+	return http.StatusCreated, id, err
+}
+
+func (a *API) deleteIdentity(r *http.Request, _ auth.Session) (int, any, error) {
+	return http.StatusNoContent, nil, a.containers.DeleteIdentity(r.Context(), r.PathValue("name"), "")
 }

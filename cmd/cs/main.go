@@ -65,12 +65,16 @@ func main() {
 		forward(args)
 	case "cp", "copy":
 		copyFiles(args)
+	case "edit":
+		edit(one(args, "edit"))
 	case "start":
 		setRunning(one(args, "start"), true)
 	case "stop":
 		setRunning(one(args, "stop"), false)
 	case "rm", "delete":
 		removeCommand(one(args, "rm"))
+	case "identity", "identities":
+		identityCommand(args)
 	case "config":
 		writeSSHConfig(true)
 	case "version", "--version":
@@ -85,16 +89,18 @@ func main() {
 const usage = `cs: containerservice from a terminal
 
   cs                          the picker: ⏎ connect (tmux console), p plain shell, t other tmux session,
-                                n new, s start/stop, d delete, / filter, q quit
+                                n new, e edit, s start/stop, d delete, / filter, q quit
   cs new <name>               make a container from a preset (~/.config/cs/presets.toml) and connect
                                 --preset NAME  --image REF  --debug  --disk GiB  --home GiB (0: none)
-                                --class NAME   --no-claude
+                                --class NAME   --no-claude   --identity new|none|NAME
   cs ssh <name>               connect, in the tmux session "console" (the web console's)
                                 -s NAME  another tmux session    --plain  a shell without tmux
   cs fwd <name> 3000[:8080]   forward localhost:3000 to the container's port 8080 (default the same)
   cs cp [-r] SRC DST          copy, one side <name>:<path>
+  cs edit <name>              change its settings in $EDITOR (saving restarts it if it runs)
   cs ls                       list
   cs start|stop|rm <name>
+  cs identity [ls|new NAME|rm NAME]  identities: what containers are to other services
   cs config                   write ~/.ssh/cs_config: ssh <name>.cs and editors' remote SSH
   cs login|logout             sign in with the browser / forget the token
 
@@ -136,6 +142,43 @@ func removeCommand(name string) {
 	if strings.TrimSpace(answer) != name {
 		die("not deleted")
 	}
-	must(call("DELETE", "/api/containers/"+pathName(name), nil, nil))
-	fmt.Printf("%s: deleted (volumes kept)\n", name)
+	c := get(name)
+	q := deleteQuery(c)
+	must(call("DELETE", "/api/containers/"+pathName(name)+q, nil, nil))
+	if q != "" {
+		fmt.Printf("%s: deleted, with its identity %s (volumes kept)\n", name, c.Identity)
+	} else {
+		fmt.Printf("%s: deleted (volumes kept)\n", name)
+	}
+}
+
+func identityCommand(args []string) {
+	if len(args) == 0 || args[0] == "ls" {
+		ids := identities()
+		if len(ids) == 0 {
+			fmt.Println("No identities yet.")
+			return
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "NAME\tWORN BY\tSUBJECT")
+		for _, id := range ids {
+			fmt.Fprintf(w, "%s\t%s\t%s\n", id.Name, strings.Join(id.UsedBy, ","), id.Subject)
+		}
+		w.Flush()
+		return
+	}
+	if len(args) != 2 {
+		die("usage: cs identity [ls | new NAME | rm NAME]")
+	}
+	switch args[0] {
+	case "new":
+		var id identity
+		must(call("POST", "/api/identities", map[string]string{"name": args[1]}, &id))
+		fmt.Printf("%s: %s\n", id.Name, id.Subject)
+	case "rm":
+		must(call("DELETE", "/api/identities/"+pathName(args[1]), nil, nil))
+		fmt.Printf("%s: deleted\n", args[1])
+	default:
+		die("usage: cs identity [ls | new NAME | rm NAME]")
+	}
 }

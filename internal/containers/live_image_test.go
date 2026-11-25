@@ -68,7 +68,8 @@ func TestLiveImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	claude := strings.Contains(image, "/claude:")
-	_, err = s.Create(ctx, Spec{Name: "liveimg", Image: image, MemoryMiB: 1024, ClaudeLogin: claude,
+	_, err = s.Create(ctx, Spec{Name: "liveimg", Image: image, MemoryMiB: 1024, ClaudeLogin: claude, FuseMounts: os.Getenv("CONTAINERSERVICE_LIVE_FUSE") != "",
+		Identity: os.Getenv("CONTAINERSERVICE_LIVE_IDENTITY"), NewIdentity: os.Getenv("CONTAINERSERVICE_LIVE_IDENTITY") != "",
 		Mounts: []Mount{{Path: "/home/dev", Volume: "liveimg-home", New: &NewVolume{StorageClass: "zfs", SizeGiB: 1}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +78,7 @@ func TestLiveImage(t *testing.T) {
 		if os.Getenv("CONTAINERSERVICE_LIVE_KEEP") != "" {
 			return
 		}
-		s.Delete(context.Background(), "liveimg")
+		s.Delete(context.Background(), "liveimg", false)
 		eventually(t, s, func() bool { _, err := s.Get("liveimg"); return err != nil })
 		eventually(t, s, func() bool { return len(mustUsedBy(s)["liveimg-home"]) == 0 })
 		if err := s.DeleteVolume(context.Background(), "liveimg-home"); err != nil {

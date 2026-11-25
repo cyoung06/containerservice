@@ -84,3 +84,31 @@ func TestClaude(t *testing.T) {
 		t.Errorf("after clearing: %+v", c)
 	}
 }
+
+func TestIdentities(t *testing.T) {
+	p := open(t)
+	ctx := context.Background()
+	p.pool.Exec(ctx, `TRUNCATE identities`)
+	if ok, err := p.AddIdentity(ctx, Identity{Name: "a", ServiceAccount: "identity-a-x"}, 2); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	if _, err := p.AddIdentity(ctx, Identity{Name: "a", ServiceAccount: "identity-a-y"}, 2); !errors.Is(err, ErrExists) {
+		t.Errorf("same name: %v", err)
+	}
+	p.AddIdentity(ctx, Identity{Name: "b", ServiceAccount: "identity-b-x"}, 2)
+	if ok, _ := p.AddIdentity(ctx, Identity{Name: "c", ServiceAccount: "identity-c-x"}, 2); ok {
+		t.Error("over the limit")
+	}
+	if id, err := p.Identity(ctx, "a"); err != nil || id.ServiceAccount != "identity-a-x" {
+		t.Errorf("%+v %v", id, err)
+	}
+	if id, err := p.DeleteIdentity(ctx, "a"); err != nil || id.ServiceAccount != "identity-a-x" {
+		t.Errorf("delete: %+v %v", id, err)
+	}
+	if _, err := p.Identity(ctx, "a"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("after delete: %v", err)
+	}
+	if _, err := p.DeleteIdentity(ctx, "a"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("delete again: %v", err)
+	}
+}

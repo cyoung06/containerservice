@@ -26,6 +26,8 @@ import (
 	appslisters "k8s.io/client-go/listers/apps/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/cyoung06/containerservice/internal/store"
 )
 
 const (
@@ -78,6 +80,11 @@ type Keys interface {
 	KeyLines(ctx context.Context) ([]string, error)
 	// ClaudeConfig is the Claude Code token and settings JSON ("" for none).
 	ClaudeConfig(ctx context.Context) (token, settings string, err error)
+	// The identities' records (identity.go).
+	AddIdentity(ctx context.Context, id store.Identity, max int) (bool, error)
+	Identities(ctx context.Context) ([]store.Identity, error)
+	Identity(ctx context.Context, name string) (store.Identity, error)
+	DeleteIdentity(ctx context.Context, name string) (store.Identity, error)
 }
 
 // Service manages the containers and volumes.

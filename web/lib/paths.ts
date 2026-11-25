@@ -1,6 +1,9 @@
 /** Pages of a static export take their object from the query string. */
 export const containerPath = (name: string): string => `/container/?name=${encodeURIComponent(name)}`;
 
+/** A container's edit form. */
+export const editPath = (name: string): string => `/container/edit/?name=${encodeURIComponent(name)}`;
+
 /** The full-window terminal a container's terminal pops out into. */
 export const terminalPath = (name: string): string => `/terminal/?name=${encodeURIComponent(name)}`;
 

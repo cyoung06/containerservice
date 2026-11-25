@@ -50,7 +50,7 @@ func TestLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		s.Delete(context.Background(), "livebox")
+		s.Delete(context.Background(), "livebox", false)
 		eventually(t, s, func() bool { _, err := s.Get("livebox"); return err != nil })
 	}()
 	ch, done := s.Subscribe()

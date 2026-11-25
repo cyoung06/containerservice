@@ -32,6 +32,7 @@ type memKeys struct {
 	mu     sync.Mutex
 	keys   []store.Key
 	claude store.Claude
+	ids    []store.Identity
 }
 
 func (m *memKeys) AddKey(_ context.Context, k store.Key, max int) (bool, error) {
@@ -89,6 +90,43 @@ func (m *memKeys) SetClaudeSettings(_ context.Context, settings string) error {
 	defer m.mu.Unlock()
 	m.claude.Settings = settings
 	return nil
+}
+func (m *memKeys) AddIdentity(_ context.Context, id store.Identity, max int) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, x := range m.ids {
+		if x.Name == id.Name {
+			return false, store.ErrExists
+		}
+	}
+	m.ids = append(m.ids, id)
+	return true, nil
+}
+func (m *memKeys) Identities(context.Context) ([]store.Identity, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]store.Identity(nil), m.ids...), nil
+}
+func (m *memKeys) Identity(_ context.Context, name string) (store.Identity, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, x := range m.ids {
+		if x.Name == name {
+			return x, nil
+		}
+	}
+	return store.Identity{}, store.ErrNotFound
+}
+func (m *memKeys) DeleteIdentity(_ context.Context, name string) (store.Identity, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, x := range m.ids {
+		if x.Name == name {
+			m.ids = append(m.ids[:i], m.ids[i+1:]...)
+			return x, nil
+		}
+	}
+	return store.Identity{}, store.ErrNotFound
 }
 func (m *memKeys) ClaudeConfig(ctx context.Context) (string, string, error) {
 	c, _ := m.Claude(ctx)
@@ -214,5 +252,39 @@ func TestClaude(t *testing.T) {
 	}
 	if w := do(h, "PUT", "/api/claude/token", `{"token":"x"}`, false); w.Code != http.StatusForbidden {
 		t.Errorf("without X-Requested-With: %d", w.Code)
+	}
+}
+
+func TestUpdateContainer(t *testing.T) {
+	h, client := setup(t, true)
+	if w := do(h, "POST", "/api/containers", `{"name":"box","image":"ubuntu","mounts":[]}`, true); w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body)
+	}
+	w := do(h, "PATCH", "/api/containers/box", `{"name":"box","image":"debian","mounts":[],"fuseMounts":true}`, true)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"fuseMounts":true`) {
+		t.Fatalf("patch: %d %s", w.Code, w.Body)
+	}
+	set, _ := client.AppsV1().StatefulSets("cs").Get(context.Background(), "box", metav1.GetOptions{})
+	if set.Spec.Template.Spec.Containers[0].Image != "debian" {
+		t.Errorf("image %q", set.Spec.Template.Spec.Containers[0].Image)
+	}
+	if w := do(h, "PATCH", "/api/containers/box", `{"name":"box","image":"debian","mounts":[]}`, false); w.Code != http.StatusForbidden {
+		t.Errorf("without X-Requested-With: %d", w.Code)
+	}
+}
+
+func TestIdentitiesAPI(t *testing.T) {
+	h, _ := setup(t, true)
+	if w := do(h, "POST", "/api/identities", `{"name":"agent"}`, true); w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"subject":"system:serviceaccount:cs:identity-agent-`) {
+		t.Fatalf("create: %d %s", w.Code, w.Body)
+	}
+	if w := do(h, "POST", "/api/identities", `{"name":"agent"}`, true); w.Code != http.StatusConflict {
+		t.Errorf("again: %d", w.Code)
+	}
+	if w := do(h, "GET", "/api/identities", "", false); w.Code != 200 || !strings.Contains(w.Body.String(), `"name":"agent"`) {
+		t.Errorf("list: %d %s", w.Code, w.Body)
+	}
+	if w := do(h, "DELETE", "/api/identities/agent", "", true); w.Code != http.StatusNoContent {
+		t.Errorf("delete: %d %s", w.Code, w.Body)
 	}
 }

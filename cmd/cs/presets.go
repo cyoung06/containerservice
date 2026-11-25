@@ -25,6 +25,9 @@ type Preset struct {
 	ClaudeLogin bool    `toml:"claude_login"`
 	CPU         float64 `toml:"cpu"`    // cores (0: no limit)
 	Memory      int     `toml:"memory"` // MiB (0: no limit)
+	// Identity: "new" (or empty: one of its own, named after the container), "none", or the name
+	// of one of yours to wear.
+	Identity string `toml:"identity"`
 }
 
 type presetFile struct {
@@ -40,6 +43,7 @@ const defaultPresets = `# cs presets: "cs new <name>" uses the default one, "cs 
 #   debug         ptrace and no seccomp filter (else hardened)
 #   claude_login  the shared Claude token (set on the console's Claude page)
 #   cpu, memory   limits: cores, MiB (0: none)
+#   identity      "new" (default: its own, named after the container), "none", or one of yours
 default = "claude"
 
 [presets.claude]
@@ -129,6 +133,13 @@ func specFor(name string, p Preset, s session) spec {
 	if p.Home > 0 {
 		sp.Mounts = append(sp.Mounts, mount{Path: "/home/dev", Volume: name + "-home", New: &newVolume{StorageClass: p.Class, SizeGiB: p.Home}})
 	}
+	switch p.Identity {
+	case "", "new":
+		sp.Identity, sp.NewIdentity = name, true
+	case "none":
+	default:
+		sp.Identity = p.Identity
+	}
 	return sp
 }
 
@@ -142,6 +153,7 @@ func createCommand(args []string) {
 	home := fs.Int("home", 0, "new volume <name>-home at /home/dev, GiB (0: none)")
 	class := fs.String("class", "", "the home volume's storage class")
 	noClaude := fs.Bool("no-claude", false, "without the shared Claude login")
+	ident := fs.String("identity", "", `"new", "none", or one of yours`)
 	name := parseWithName(fs, args)
 	p, ok := presets.Presets[*presetName]
 	if !ok {
@@ -161,6 +173,8 @@ func createCommand(args []string) {
 			p.Class = *class
 		case "no-claude":
 			p.ClaudeLogin = !*noClaude
+		case "identity":
+			p.Identity = *ident
 		}
 	})
 	if name == "" {
