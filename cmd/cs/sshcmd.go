@@ -35,7 +35,7 @@ var sessionRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 // clipboard through OSC 52, no status bar, the mouse. Without tmux in the image: a login shell.
 func tmuxCommand(session string) string {
 	return `if command -v tmux >/dev/null 2>&1; then exec tmux start-server \; set -g default-terminal tmux-256color \; ` +
-		`set -as terminal-features '*:RGB' \; set -as terminal-features '*:clipboard' \; set -g set-clipboard on \; ` +
+		`set -as terminal-features '*:RGB' \; set -as terminal-features '*:clipboard' \; set -as terminal-features '*:hyperlinks' \; set -g set-clipboard on \; ` +
 		`set -g status off \; set -g mouse on \; set -g history-limit 50000 \; set-environment -g COLORTERM truecolor \; ` +
 		`new-session -A -s ` + session + `; else exec "${SHELL:-/bin/sh}" -l; fi`
 }

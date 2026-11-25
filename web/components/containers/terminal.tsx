@@ -18,6 +18,77 @@ const stdin = 0;
 const resizeChannel = 4;
 
 /** A dark terminal whatever the page's theme, with muted, readable ANSI colors. */
+/** Opens a link from the terminal in a new tab: http(s) only (no javascript: and the like). */
+const openLink = (uri: string) => {
+  try {
+    const url = new URL(uri);
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      window.open(url.href, "_blank", "noopener,noreferrer");
+    }
+  } catch {
+    // not a URL
+  }
+};
+
+/**
+ * The clipboard, fed by OSC 52 ("c;<base64>"). Browsers that let a page write the clipboard only
+ * during a user's action (Safari) get a write started at that action (expect) with a promise the
+ * text fills in when it arrives; others are written to directly.
+ */
+class Clipboard {
+  private pending: { resolve: (blob: Blob) => void; reject: () => void; timer: number } | null = null;
+
+  /** A copy should come soon (the user just selected in tmux): start the write now. */
+  expect() {
+    if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+      return;
+    }
+    this.drop();
+    let resolve: (blob: Blob) => void = () => {};
+    let reject: () => void = () => {};
+    const text = new Promise<Blob>((ok, fail) => {
+      resolve = ok;
+      reject = fail;
+    });
+    text.catch(() => {}); // nothing came: the write just doesn't happen
+    const timer = window.setTimeout(() => {
+      reject();
+      this.pending = null;
+    }, 1500);
+    this.pending = { resolve, reject, timer };
+    void navigator.clipboard.write([new ClipboardItem({ "text/plain": text })]).catch(() => {});
+  }
+
+  /** An OSC 52 sequence's data: "<selection>;<base64>" ("?" asks for the clipboard: not answered). */
+  receive(data: string) {
+    const payload = data.slice(data.indexOf(";") + 1);
+    if (payload === "?" || payload === "") {
+      return;
+    }
+    let text: string;
+    try {
+      text = new TextDecoder().decode(Uint8Array.from(atob(payload), (c) => c.charCodeAt(0)));
+    } catch {
+      return;
+    }
+    if (this.pending) {
+      window.clearTimeout(this.pending.timer);
+      this.pending.resolve(new Blob([text], { type: "text/plain" }));
+      this.pending = null;
+      return;
+    }
+    void navigator.clipboard?.writeText(text).catch(() => {});
+  }
+
+  private drop() {
+    if (this.pending) {
+      window.clearTimeout(this.pending.timer);
+      this.pending.reject();
+      this.pending = null;
+    }
+  }
+}
+
 const terminalTheme = {
   background: "#16181d",
   foreground: "#d8dbe2",
@@ -62,7 +133,7 @@ export const Terminal = ({
     }
     let disposed = false;
     let cleanup = () => {};
-    void Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit"), import("@xterm/addon-clipboard")]).then(([{ Terminal: XTerm }, { FitAddon }, { ClipboardAddon }]) => {
+    void Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit"), import("@xterm/addon-web-links")]).then(([{ Terminal: XTerm }, { FitAddon }, { WebLinksAddon }]) => {
       if (disposed) {
         return;
       }
@@ -77,12 +148,45 @@ export const Terminal = ({
         // Truecolor programs (Claude Code's orange, editors' themes) draw their own colors; this is
         // the dark palette for everything that uses the 16 ANSI colors.
         theme: terminalTheme,
+        // OSC 8 hyperlinks (Claude Code marks its links so): opened in a new tab, http(s) only.
+        linkHandler: { activate: (_event, uri) => openLink(uri) },
       });
       const fit = new FitAddon();
       terminal.loadAddon(fit);
-      // OSC 52: programs (tmux's mouse selection, editors) put text on the browser's clipboard.
-      terminal.loadAddon(new ClipboardAddon());
+      // Plain URLs in the output, clickable too.
+      terminal.loadAddon(new WebLinksAddon((_event, uri) => openLink(uri)));
       terminal.open(element);
+      const clipboard = new Clipboard();
+      // OSC 52: tmux (its mouse selection) and editors put text on the clipboard this way.
+      const osc52 = terminal.parser.registerOscHandler(52, (data) => {
+        clipboard.receive(data);
+        return true;
+      });
+      // A drag hands tmux the selection, and its copy comes back a moment later: start the
+      // clipboard write now, while the mouse-up still counts as the user's doing (Safari insists).
+      let downAt: { x: number; y: number } | null = null;
+      const onDown = (event: MouseEvent) => {
+        downAt = { x: event.clientX, y: event.clientY };
+      };
+      const onUp = (event: MouseEvent) => {
+        const dragged = downAt !== null && Math.hypot(event.clientX - downAt.x, event.clientY - downAt.y) > 3;
+        downAt = null;
+        if ((dragged || event.detail >= 2) && !terminal.hasSelection()) {
+          clipboard.expect();
+        }
+      };
+      element.addEventListener("mousedown", onDown, true);
+      element.addEventListener("mouseup", onUp, true);
+      // ⌘C (Ctrl+Shift+C elsewhere) copies the page's own selection (⌥-drag), within the key press.
+      terminal.attachCustomKeyEventHandler((event) => {
+        const copyKey = event.type === "keydown" && event.key.toLowerCase() === "c" && (event.metaKey || (event.ctrlKey && event.shiftKey));
+        if (copyKey && terminal.hasSelection()) {
+          void navigator.clipboard?.writeText(terminal.getSelection()).catch(() => {});
+          event.preventDefault();
+          return false;
+        }
+        return true;
+      });
       fit.fit();
       terminal.focus();
 
@@ -139,6 +243,9 @@ export const Terminal = ({
       observer.observe(element);
 
       cleanup = () => {
+        osc52.dispose();
+        element.removeEventListener("mousedown", onDown, true);
+        element.removeEventListener("mouseup", onUp, true);
         observer.disconnect();
         typing.dispose();
         binary.dispose();
