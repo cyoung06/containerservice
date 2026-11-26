@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/cyoung06/containerservice/internal/containers"
+	"github.com/syeyoung-cloud/containerservice/internal/containers"
 )
 
 // Config is the bastion's.

@@ -35,4 +35,4 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
             --title "$GITHUB_REF_NAME" \
-            --notes "cs, the command-line client: download the archive for your system, put cs on your PATH, then cs login. Or: go install github.com/cyoung06/containerservice/cmd/cs@$GITHUB_REF_NAME"
+            --notes "cs, the command-line client: download the archive for your system, put cs on your PATH, then cs login. Or: go install github.com/syeyoung-cloud/containerservice/cmd/cs@$GITHUB_REF_NAME"

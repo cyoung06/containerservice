@@ -13,8 +13,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/cyoung06/containerservice/internal/bastion"
-	"github.com/cyoung06/containerservice/internal/containers"
+	"github.com/syeyoung-cloud/containerservice/internal/bastion"
+	"github.com/syeyoung-cloud/containerservice/internal/containers"
 )
 
 var version = "dev"

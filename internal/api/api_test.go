@@ -15,9 +15,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/cyoung06/containerservice/internal/auth"
-	"github.com/cyoung06/containerservice/internal/containers"
-	"github.com/cyoung06/containerservice/internal/store"
+	"github.com/syeyoung-cloud/containerservice/internal/auth"
+	"github.com/syeyoung-cloud/containerservice/internal/containers"
+	"github.com/syeyoung-cloud/containerservice/internal/store"
 )
 
 const origin = "https://containers.example.org"

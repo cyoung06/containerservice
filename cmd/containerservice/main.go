@@ -21,12 +21,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/cyoung06/containerservice/internal/api"
-	"github.com/cyoung06/containerservice/internal/auth"
-	"github.com/cyoung06/containerservice/internal/containers"
-	"github.com/cyoung06/containerservice/internal/store"
-	"github.com/cyoung06/containerservice/internal/terminal"
-	"github.com/cyoung06/containerservice/internal/web"
+	"github.com/syeyoung-cloud/containerservice/internal/api"
+	"github.com/syeyoung-cloud/containerservice/internal/auth"
+	"github.com/syeyoung-cloud/containerservice/internal/containers"
+	"github.com/syeyoung-cloud/containerservice/internal/store"
+	"github.com/syeyoung-cloud/containerservice/internal/terminal"
+	"github.com/syeyoung-cloud/containerservice/internal/web"
 )
 
 var version = "dev"

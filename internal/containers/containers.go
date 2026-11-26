@@ -18,7 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
-	"github.com/cyoung06/containerservice/internal/store"
+	"github.com/syeyoung-cloud/containerservice/internal/store"
 )
 
 // MainContainer is the name of the container in each pod (what the terminal execs into).

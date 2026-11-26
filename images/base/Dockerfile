@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -f /etc/ssh/ssh_host_* \
  && curl -fsSLo /tmp/rclone.deb https://github.com/rclone/rclone/releases/download/v${RCLONE}/rclone-v${RCLONE}-linux-amd64.deb \
  && dpkg -i /tmp/rclone.deb && rm /tmp/rclone.deb \
- && curl -fsSLo /tmp/sws.tar.gz https://github.com/cyoung06/sws/releases/download/v${SWS}/sws_${SWS}_linux_amd64.tar.gz \
+ && curl -fsSLo /tmp/sws.tar.gz https://github.com/syeyoung-cloud/sws/releases/download/v${SWS}/sws_${SWS}_linux_amd64.tar.gz \
  && echo "${SWS_SHA256}  /tmp/sws.tar.gz" | sha256sum -c - \
  && tar -xzf /tmp/sws.tar.gz -C /tmp && install -m 755 /tmp/sws_${SWS}_linux_amd64/sws /usr/local/bin/sws \
  && rm -rf /tmp/sws.tar.gz /tmp/sws_${SWS}_linux_amd64 \

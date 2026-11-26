@@ -38,7 +38,7 @@ made, shared between containers and deleted on their own page. "FUSE mounts" nee
 `containerservice-fuse` seccomp and AppArmor profiles (`host/` in the cluster repo) and the FUSE
 device plugin (`cmd/fuse-device-plugin`), and can't be on with Debugging.
 
-The images carry [sws](https://github.com/cyoung06/sws), configured (`/etc/sws/config.toml`) for
+The images carry [sws](https://github.com/syeyoung-cloud/sws), configured (`/etc/sws/config.toml`) for
 the drive, Forgejo through git-sts, Pulp and notify: `sws whoami`, `sws drive request "…"`, `sws drive setup`
 (then `ssh drive-<owner>`, `sftp`, `rsync`, `sshfs`), `sws git setup`, `sws pulp token`, `sws notify request "…"`. The `claude` image tells Claude about the container and sws (`/etc/claude-code/CLAUDE.md`) and notifies the person through notify when Claude waits for them (a Notification hook in its managed settings).
 
@@ -61,6 +61,6 @@ may own).
 `cs` is the command-line client: a picker of your containers to land in over SSH (in the web
 console's tmux session), quick creation from presets (`~/.config/cs/presets.toml`), port
 forwards and copies. It signs in with OAuth 2.0 for native apps against the server. Get it from
-the [releases](https://github.com/cyoung06/containerservice/releases), or
-`go install github.com/cyoung06/containerservice/cmd/cs@latest`; then `cs login` and `cs`.
+the [releases](https://github.com/syeyoung-cloud/containerservice/releases), or
+`go install github.com/syeyoung-cloud/containerservice/cmd/cs@latest`; then `cs login` and `cs`.
 `CS_ORIGIN` points it at a server other than containers.syeyoung.dev.

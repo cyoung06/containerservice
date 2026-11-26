@@ -1,4 +1,4 @@
-module github.com/cyoung06/containerservice
+module github.com/syeyoung-cloud/containerservice
 
 go 1.26.0
 

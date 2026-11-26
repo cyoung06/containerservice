@@ -1,4 +1,4 @@
-# sws (github.com/cyoung06/sws): this container's way into the services that take workload
+# sws (github.com/syeyoung-cloud/sws): this container's way into the services that take workload
 # identity, with no stored secret. Its identity is the container's (containerservice's identities):
 # sws asks the API server for a token bound to the pod, for each service's audience.
 #   sws whoami                         the subject a person grants to

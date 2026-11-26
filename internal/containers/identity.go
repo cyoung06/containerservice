@@ -26,7 +26,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/cyoung06/containerservice/internal/store"
+	"github.com/syeyoung-cloud/containerservice/internal/store"
 )
 
 const (

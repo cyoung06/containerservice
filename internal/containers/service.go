@@ -27,7 +27,7 @@ import (
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/cyoung06/containerservice/internal/store"
+	"github.com/syeyoung-cloud/containerservice/internal/store"
 )
 
 const (

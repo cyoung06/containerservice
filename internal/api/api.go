@@ -16,10 +16,10 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/cyoung06/containerservice/internal/auth"
-	"github.com/cyoung06/containerservice/internal/containers"
-	"github.com/cyoung06/containerservice/internal/store"
-	"github.com/cyoung06/containerservice/internal/terminal"
+	"github.com/syeyoung-cloud/containerservice/internal/auth"
+	"github.com/syeyoung-cloud/containerservice/internal/containers"
+	"github.com/syeyoung-cloud/containerservice/internal/store"
+	"github.com/syeyoung-cloud/containerservice/internal/terminal"
 )
 
 // Keys is the key table.
