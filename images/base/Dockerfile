@@ -9,9 +9,9 @@ FROM docker.io/library/ubuntu:24.04
 # container. Elsewhere only containerservice's profile applies. libfuse and rclone find it on PATH.
 # fusermount (the FUSE 2 name, a relative link to fusermount3) moves with it, so it still resolves.
 ARG RCLONE=1.76.0
-# sws: the container's way into the drive, Forgejo (git-sts) and Pulp with its identity (sws.toml).
-ARG SWS=0.1.0
-ARG SWS_SHA256=98f4126daf0bbe50f4ad5ed362f79841fbe7e39e9eae1a452271c9ec4ee799be
+# sws: the container's way into the drive, Forgejo (git-sts), Pulp and notify with its identity (sws.toml).
+ARG SWS=0.2.0
+ARG SWS_SHA256=cd231c9376dbf1f3ed03f6b032aeb4d43080e977ec0d6a6a795cc4386751b0cc
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 CONTAINERSERVICE_USER=dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
       openssh-server openssh-client sudo tini ca-certificates curl wget gnupg \

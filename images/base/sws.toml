@@ -5,6 +5,8 @@
 #   sws drive request "label"          ask for a drive folder (prints a link to approve)
 #   sws drive setup                    once: then ssh/sftp/rsync/sshfs reach drive-<owner>
 #   sws git setup / sws pulp token     Forgejo through git-sts, Pulp
+#   sws notify request "label"         ask a member to get this container's notifications
+#   sws notify send -link URL "title"  notify the members who granted it
 [identity]
 source = "kubernetes"
 
@@ -20,3 +22,7 @@ host = "git.syeyoung.dev"
 [pulp]
 url = "https://pulp.syeyoung.dev"
 audience = "https://pulp.syeyoung.dev"
+
+[notify]
+url = "https://notify.syeyoung.dev"
+audience = "https://notify.syeyoung.dev"

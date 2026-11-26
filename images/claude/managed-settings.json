@@ -1,5 +1,13 @@
 {
   "permissions": { "defaultMode": "bypassPermissions" },
   "skipDangerousModePermissionPrompt": true,
-  "env": { "DISABLE_AUTOUPDATER": "1" }
+  "env": { "DISABLE_AUTOUPDATER": "1" },
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt|elicitation_dialog|agent_needs_input",
+        "hooks": [{ "type": "command", "command": "/usr/local/bin/claude-notify", "timeout": 30 }]
+      }
+    ]
+  }
 }

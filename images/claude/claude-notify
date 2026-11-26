@@ -1,0 +1,22 @@
+#!/bin/sh
+# Claude Code's Notification hook (managed settings): when Claude waits for the person (a question,
+# a permission, idle at the prompt), tell the members who granted this container through notify,
+# with a link to its console. Never fails Claude: no grant yet, or notify unreachable, is logged to
+# ~/.cache/claude-notify.log and nothing else.
+input=$(cat)
+type=$(printf '%s' "$input" | jq -r '.notification_type // ""')
+message=$(printf '%s' "$input" | jq -r '.message // "Claude is waiting for you"' | cut -c1-900)
+cwd=$(printf '%s' "$input" | jq -r '.cwd // ""')
+name=${HOSTNAME%-0}
+case "$type" in
+  permission_prompt) title="Claude needs permission in $name" ;;
+  idle_prompt) title="Claude is waiting in $name" ;;
+  *) title="Claude needs you in $name" ;;
+esac
+body=$message
+[ -n "$cwd" ] && body="$message
+$cwd"
+mkdir -p "$HOME/.cache"
+timeout 20 sws notify send -body "$body" -link "https://containers.syeyoung.dev/terminal/?name=$name" "$title" \
+  >>"$HOME/.cache/claude-notify.log" 2>&1 || true
+exit 0

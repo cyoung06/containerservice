@@ -39,8 +39,8 @@ made, shared between containers and deleted on their own page. "FUSE mounts" nee
 device plugin (`cmd/fuse-device-plugin`), and can't be on with Debugging.
 
 The images carry [sws](https://github.com/cyoung06/sws), configured (`/etc/sws/config.toml`) for
-the drive, Forgejo through git-sts and Pulp: `sws whoami`, `sws drive request "…"`, `sws drive setup`
-(then `ssh drive-<owner>`, `sftp`, `rsync`, `sshfs`), `sws git setup`, `sws pulp token`.
+the drive, Forgejo through git-sts, Pulp and notify: `sws whoami`, `sws drive request "…"`, `sws drive setup`
+(then `ssh drive-<owner>`, `sftp`, `rsync`, `sshfs`), `sws git setup`, `sws pulp token`, `sws notify request "…"`. The `claude` image tells Claude about the container and sws (`/etc/claude-code/CLAUDE.md`) and notifies the person through notify when Claude waits for them (a Notification hook in its managed settings).
 
 `images/` has images that do all this (Ubuntu 24.04, user `dev` with passwordless sudo, home at
 `/home/dev`): `base`, `pwn` (gdb/pwndbg, pwntools, ROPgadget, one_gadget, radare2, qemu-user) and

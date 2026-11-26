@@ -20,3 +20,7 @@ COPY sshd.conf /etc/ssh/sshd_config.d/00-claude.conf
 # drop-in in managed-settings.d, merged over these); the console's token reaches login shells.
 COPY managed-settings.json /etc/claude-code/managed-settings.json
 COPY claude-token.sh /etc/profile.d/claude-token.sh
+# What Claude knows about this machine (managed memory, loaded before the user's own CLAUDE.md), and
+# the Notification hook (managed settings) that tells the person through notify when Claude waits.
+COPY CLAUDE.md /etc/claude-code/CLAUDE.md
+COPY claude-notify /usr/local/bin/claude-notify
