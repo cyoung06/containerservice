@@ -7,7 +7,7 @@ input=$(cat)
 type=$(printf '%s' "$input" | jq -r '.notification_type // ""')
 message=$(printf '%s' "$input" | jq -r '.message // "Claude is waiting for you"' | cut -c1-900)
 cwd=$(printf '%s' "$input" | jq -r '.cwd // ""')
-name=${HOSTNAME%-0}
+name=$(cat /proc/sys/kernel/hostname); name=${name%-0}   # the pod is <container>-0 (not $HOSTNAME: bash sets it but does not export it)
 case "$type" in
   permission_prompt) title="Claude needs permission in $name" ;;
   idle_prompt) title="Claude is waiting in $name" ;;
